@@ -21,24 +21,8 @@ __pycache__/
 *$py.class
 *.pyd
 *.so
-*.dll
 
-# Distribution / packaging
-build/
-dist/
-wheels/
-downloads/
-.eggs/
-*.egg-info/
-*.egg
-MANIFEST
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# PyInstaller
-*.spec
 
 # ----------------------------------------
 # Virtual environments
@@ -50,21 +34,7 @@ ENV/
 .ENV/
 .python-version
 
-# ----------------------------------------
-# Test / coverage / tooling
-# ----------------------------------------
-.pytest_cache/
-.coverage
-.coverage.*
-.cache/
-nosetests.xml
-coverage.xml
-htmlcov/
-.mypy_cache/
-.pyre/
-.pytype/
-.ruff_cache/
-.hypothesis/
+
 
 # ----------------------------------------
 # Editor / IDE
@@ -80,10 +50,3 @@ htmlcov/
 .DS_Store
 Thumbs.db
 *.log
-
-# ----------------------------------------
-# Notes
-# ----------------------------------------
-# Consider Git LFS for large binaries (models, media, etc.)
-# Example (add to .gitattributes):
-# *.bin filter=lfs diff=lfs merge=lfs -text
