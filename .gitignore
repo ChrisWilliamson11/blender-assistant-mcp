@@ -2,10 +2,19 @@
 # Project-specific ignores
 # ----------------------------------------
 
+
 # User-generated RAG database (should not be versioned)
+
 # Ignore both root-level and package directory variants
+
 /rag_db/
+
 /blender_assistant_mcp/rag_db/
+
+# Do not track packaged runtime binaries and wheels in Git
+/blender_assistant_mcp/bin/
+/blender_assistant_mcp/wheels/
+
 
 # Release archives (publish via GitHub Releases instead)
 # Restrict to repo root so you can keep zips elsewhere if needed
