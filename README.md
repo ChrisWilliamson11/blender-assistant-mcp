@@ -1,25 +1,20 @@
 blender-assistant-mcp
 
-`blender-assistant-mcp` is an open source project that integrates an LLM into Blender using the Model Context Protocol (MCP). 
+`blender-assistant-mcp` is an open source project that integrates an LLM into Blender using the Model Context Protocol (MCP).
 
 Features:
 
-- **Control Blender with Natural Language:** Send prompts to an  Ollama LLM model to perform actions in Blender.
+- **Control Blender with Natural Language:** Send prompts to an Ollama LLM model to perform actions in Blender.
 - **MCP Integration:** Uses the Model Context Protocol for structured communication between the AI model and Blender.
 - **Ollama Support:** Designed to work with Ollama for easy local model management.
 - **Ollama bundled Add-on:** Includes the Ollama exe, and CUDA DLLS so is self contained
 
 MCP Tools:
 
-
-## MCP Tools (a list of all included MCP tools):
-
-
-
-Below is a concise, categorized list of the tools exposed to the assistant. Each tool takes JSON-style arguments (shown by name only). Use get_scene_info or other “info” tools first to understand the scene, then act with creation/modification tools.
+Below is a list of the tools exposed to the assistant. Each tool takes JSON-style arguments (shown by name only) but run through an SDK assistant_sdk to keep context light. It can use assistant_help to get information about tools, as well as get_scene_info to maintain a current image of the scene hierarchy, or other “info” tools such as viewport capture to understand the scene, then act with creation/modification tools.
 
 - Blender
-  - get_scene_info(info_level, object_type, object_names, limit) — Summarize or detail scene contents
+  - get_scene_info(an outliner style representation of the scene)
   - get_object_info(name) — Detailed info for a single object
   - create_object(type, name, location, rotation, scale, text) — Create meshes, cameras, lights, text, curves, empties
   - modify_object(name, location, rotation, scale, visible) — Edit object transforms/visibility
@@ -32,9 +27,6 @@ Below is a concise, categorized list of the tools exposed to the assistant. Each
   - move_to_collection(object_names[], collection_name, unlink_from_others) — Move objects to a collection
   - set_collection_color(collection_name, color_tag) — Set collection color tag (Blender 4.2+)
   - delete_collection(collection_name, delete_objects) — Delete a collection (and optionally its objects)
-  - ensure_collections(names[], parent) — Ensure collections exist (create missing ones)
-  - safe_move_objects(object_names[], collection_name, create_if_missing, unlink_from_others) — Move objects (auto-create target if needed)
-  - set_collections_color_batch(collection_names[], color_tag) — Color-tag multiple collections
 
 - Selection
   - get_selection() — List selected objects
@@ -45,7 +37,6 @@ Below is a concise, categorized list of the tools exposed to the assistant. Each
 
 - PolyHaven
   - search_polyhaven_assets(asset_type, query, limit) — Find HDRIs, textures, or models
-  - get_polyhaven_asset_info(asset_id) — Detailed info for a PolyHaven asset
   - download_polyhaven(asset_id, file_format, resolution, apply_to_active?) — Download assets into Blender
 
 - Web
@@ -63,22 +54,23 @@ Below is a concise, categorized list of the tools exposed to the assistant. Each
   - rag_query(query, num_results, source_bias) — Retrieve doc snippets to augment prompts
   - rag_get_stats() — Database stats/status
 
-- Meta (Task Planning / Helpers)
-  - create_task_plan(task_description, subtasks[], expected_end_state) — Start a multi-step plan
-  - get_current_subtask() — What’s next in the plan
-  - complete_current_subtask() — Mark subtask done
-  - get_task_progress() — Summary of plan status
-  - cancel_task_plan() — Cancel current plan
-  - set_task_context(key, value) / get_task_context(key) — Store/retrieve transient context
-  - skip_current_subtask() — Skip ahead
-  - check_task_completion() — Validate task completion
-  - apply_to_each_selected(operation, operation_args) — Apply any tool to each selected item
-  - for_each_in_list(items[], operation, operation_args) — Batch-apply a tool to a provided list
-
 - Code
   - execute_code(code) — Execute Python in Blender (persistent namespace between calls)
 
+to build it yourself:
+
+Clone the repository
+
+build the rag database with 'build_rag_database.py' - this downloads the blender manual & API reference & builds a vector database from them to use as reference at inference time - you may need to update the download links if they change.
+
+Install Ollama
+
+Copy the exe & DLL's from your Ollama installation with 'update_ollama_bins.py
+
+download the required python wheels with download_wheels.py
+
+package the extension with build_extension.py
+
+install in blender as per usual, when its installed you can download models in the preferences, or point it to your existing Ollama models folder.
 
 A lot was learnt from Blender open MCP! (https://github.com/dhakalnirajan/blender-open-mcp)
-
-
