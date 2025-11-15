@@ -1,0 +1,39 @@
+schema_version = "1.0.0"
+
+id = "blender_assistant_mcp"
+version = "2.0.0"
+name = "Blender Assistant with MCP"
+tagline = "GPU-accelerated AI assistant using Ollama for Blender automation"
+maintainer = "Blender MCP Community"
+type = "add-on"
+
+tags = ["3D View", "Animation", "Modeling", "User Interface"]
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:MIT"]
+
+# Minimal dependencies - Ollama handles LLM inference
+# MCP for tool definitions, requests for HTTP, Pillow for images
+wheels = [
+  "./wheels/certifi-2025.8.3-py3-none-any.whl",
+  "./wheels/idna-3.10-py3-none-any.whl",
+  "./wheels/pillow-11.3.0-cp311-cp311-win_amd64.whl",
+  "./wheels/httpx-0.28.1-py3-none-any.whl",
+  "./wheels/httpcore-1.0.9-py3-none-any.whl",
+  "./wheels/anyio-4.11.0-py3-none-any.whl",
+  "./wheels/sniffio-1.3.1-py3-none-any.whl",
+  "./wheels/h11-0.16.0-py3-none-any.whl",
+]
+
+[permissions]
+network = "Connect to local Ollama server and download models"
+files = "Read and write GGUF model files to local models directory"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  ".*",
+  "*.pyc",
+]
+

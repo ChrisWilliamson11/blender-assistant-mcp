@@ -1,0 +1,2 @@
+blender_assistant_mcp/bin/** filter=lfs diff=lfs merge=lfs -text
+blender_assistant_mcp/wheels/** filter=lfs diff=lfs merge=lfs -text

@@ -1,0 +1,89 @@
+# ----------------------------------------
+# Project-specific ignores
+# ----------------------------------------
+
+# User-generated RAG database (should not be versioned)
+# Ignore both root-level and package directory variants
+/rag_db/
+/blender_assistant_mcp/rag_db/
+
+# Release archives (publish via GitHub Releases instead)
+# Restrict to repo root so you can keep zips elsewhere if needed
+/*.zip
+
+# ----------------------------------------
+# Python build artifacts
+# ----------------------------------------
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.so
+*.dll
+
+# Distribution / packaging
+build/
+dist/
+wheels/
+downloads/
+.eggs/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# PyInstaller
+*.spec
+
+# ----------------------------------------
+# Virtual environments
+# ----------------------------------------
+.venv/
+venv/
+env/
+ENV/
+.ENV/
+.python-version
+
+# ----------------------------------------
+# Test / coverage / tooling
+# ----------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+.cache/
+nosetests.xml
+coverage.xml
+htmlcov/
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+.hypothesis/
+
+# ----------------------------------------
+# Editor / IDE
+# ----------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ----------------------------------------
+# OS / Misc
+# ----------------------------------------
+.DS_Store
+Thumbs.db
+*.log
+
+# ----------------------------------------
+# Notes
+# ----------------------------------------
+# Consider Git LFS for large binaries (models, media, etc.)
+# Example (add to .gitattributes):
+# *.bin filter=lfs diff=lfs merge=lfs -text
