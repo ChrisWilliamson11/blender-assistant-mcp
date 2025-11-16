@@ -425,7 +425,6 @@ def gh_release_create(
     run(cmd, dry_run=dry_run)
 
 
-
 def gh_release_upload(
     tag: str,
     asset: Path,
@@ -452,8 +451,7 @@ def gh_release_upload(
 # -------------------------------
 
 
-
-
+@dataclass
 class Args:
     bump: Optional[str]
 
@@ -469,7 +467,6 @@ class Args:
 
     update_existing: bool
     dry_run: bool
-
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> Args:
@@ -496,46 +493,32 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> Args:
         help="GitHub repository in 'owner/name' form (if omitted, gh infers from git remotes)",
     )
 
-        parser.add_argument(
-
-            "--notes", help="Custom release notes (overrides --generate-notes)"
-
-        )
-
-        parser.add_argument(
-
-            "--update-existing",
-            action="store_true",
-
-            help="Upload asset to an existing GitHub release (skip creating a new release)",
-        )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Do not write files or run external commands",
-
-        )
-
-
-
-    return Args(
-        bump=ns.bump if ns.new_version is None else None,
-
-        new_version=ns.new_version,
-
-        no_build=ns.no_build,
-
-        prerelease=ns.prerelease,
-
-        repo=ns.repo,
-
-        notes=ns.notes,
-
-        update_existing=ns.update_existing,
-        dry_run=ns.dry_run,
-
+    parser.add_argument(
+        "--notes", help="Custom release notes (overrides --generate-notes)"
     )
 
+    parser.add_argument(
+        "--update-existing",
+        action="store_true",
+        help="Upload asset to an existing GitHub release (skip creating a new release)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Do not write files or run external commands",
+    )
+
+    ns = parser.parse_args(list(argv) if argv is not None else None)
+    return Args(
+        bump=ns.bump if ns.new_version is None else None,
+        new_version=ns.new_version,
+        no_build=ns.no_build,
+        prerelease=ns.prerelease,
+        repo=ns.repo,
+        notes=ns.notes,
+        update_existing=ns.update_existing,
+        dry_run=ns.dry_run,
+    )
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
@@ -602,7 +585,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         error(f"Failed to push changes: {e}")
         return 1
 
-
     # Create or update GitHub release
 
     try:
@@ -611,9 +593,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
             gh_release_upload(
                 tag=tag,
-
                 asset=zip_path,
-
                 repo=args.repo,
                 clobber=True,
                 dry_run=args.dry_run,
@@ -624,23 +604,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 tag=tag,
                 asset=zip_path,
                 title=target_version,
-
                 notes=args.notes,
-
                 prerelease=args.prerelease,
-
                 repo=args.repo,
-
                 dry_run=args.dry_run,
-
             )
 
     except Exception as e:
-
         error(f"Failed to publish GitHub release: {e}")
 
         return 1
-
 
     print("\n✓ Release complete")
     print(f"  Tag:    {tag}")
