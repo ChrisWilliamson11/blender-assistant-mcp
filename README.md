@@ -33,6 +33,7 @@ Below is a list of the tools. Each tool takes JSON-style arguments & can be expo
   - move_to_collection(object_names[], collection_name, unlink_from_others) — Move objects to a collection
   - set_collection_color(collection_name, color_tag) — Set collection color tag (Blender 4.2+)
   - delete_collection(collection_name, delete_objects) — Delete a collection (and optionally its objects)
+  - assistant_help(tool, tools[]) — Get JSON schemas and usage examples for assistant_sdk tool aliases
 
 - Selection
   - get_selection() — List selected objects
@@ -49,7 +50,12 @@ Below is a list of the tools. Each tool takes JSON-style arguments & can be expo
   - web_search(query, num_results) — Simple web search (DuckDuckGo HTML)
   - search_wikimedia_image(query, apply_to_active) — Find and download free images from Wikimedia
   - fetch_webpage(url, max_length) — Fetch page and extract text content
+  - extract_image_urls(url, min_width, max_images) — Extract likely content image URLs from a webpage
   - download_image_as_texture(url, apply_to_active, pack_image) — Download an image and apply as texture
+
+- Stock Photos
+  - search_stock_photos(source, query, per_page, orientation) — Search Unsplash or Pexels for stock photos
+  - download_stock_photo(source, photo_id, apply_as_texture) — Download and apply stock photos as textures
 
 - Sketchfab
   - sketchfab_login(api_token) — Store token for authenticated requests
