@@ -11,15 +11,15 @@ directly inside Blender's Python environment.
 import os
 import sys
 
+__version__ = "2.1.3"
 _extension_dir = os.path.dirname(os.path.abspath(__file__))
 
-
+    "version": (2, 1, 3),
 bl_info = {
     "version": (2, 1, 2),
     "blender": (4, 2, 0),
     "category": "3D View",
 }
-
 
 # Import modules
 from . import (
@@ -44,7 +44,6 @@ _modules = [
     ui,
     preferences,
 ]
-
 
 def register():
     """Register all extension modules."""
@@ -96,7 +95,6 @@ def register():
     except Exception as e:
         print(f"[{__package__}] Warning: Could not start Ollama: {e}")
 
-
 def unregister():
     """Unregister all extension modules."""
     # Stop Ollama subprocess first
@@ -113,7 +111,6 @@ def unregister():
             mod.unregister()
 
     print(f"[{__package__}] Blender Automation Assistant with MCP unregistered")
-
 
 if __name__ == "__main__":
     register()
