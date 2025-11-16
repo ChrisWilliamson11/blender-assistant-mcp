@@ -3,12 +3,17 @@ blender-assistant-mcp
 `blender-assistant-mcp` is an open source project that integrates an LLM into Blender using the Model Context Protocol (MCP).
 
 Its meant to be an interactive help / automation tool to allow you to free up some of the more mundane 3D tasks you dont enjoy, so you can spend more time on those you do. It excells at doing slightly 'fuzzy' but simple tasks than a built in operator doesnt do on its own.for example 'copy the bone constraints from every selected bone to its parent' or 'randomise the phase values of all the noise modifiers on every animation channel on my selected object' or 'why is my scene rendering black???' :D
+
+
 Features:
 
 - **Control Blender with Natural Language:** Send prompts to an Ollama LLM model to perform actions in Blender.
 - **MCP Integration:** Uses the Model Context Protocol for structured communication between the AI model and Blender.
+- **Code execution with MCP** Also has a code path to create an assistant_sdk the model can access to reduce context bloat.
+- **RAG Database** includes a RAG database of both the blender manual, and API reference, which the assistant can access.
+- **Vision Tool** it can capture the viewport and send the image to a dedicated vision LLM, to give it rudimentary 'vision'
 - **Ollama Support:** Designed to work with Ollama for easy local model management.
-- **Ollama bundled Add-on:** Includes the Ollama exe, and CUDA DLLS so is self contained
+- **Ollama bundled Add-on:** Includes the Ollama exe, and CUDA DLLS so is self contained install (the release)
 
 MCP Tools:
 
@@ -70,14 +75,7 @@ Copy the exe & DLL's from your Ollama installation with 'update_ollama_bins.py
 
 download the required python wheels with download_wheels.py
 
-
 package the extension with scripts/build_extension.py
-
-Usage:
-- python scripts/build_extension.py
-- python scripts/build_extension.py --dry-run
-- python scripts/build_extension.py --output-dir dist
-
 
 install in blender as per usual, when its installed you can download models in the preferences, or point it to your existing Ollama models folder.
 
