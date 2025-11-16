@@ -14,11 +14,13 @@ import sys
 __version__ = "2.1.0"
 _extension_dir = os.path.dirname(os.path.abspath(__file__))
 
-    "version": (2, 1, 0),
+
 bl_info = {
+    "version": (2, 1, 0),
     "blender": (4, 2, 0),
     "category": "3D View",
 }
+
 
 # Import modules
 from . import (
