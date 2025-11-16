@@ -457,14 +457,24 @@ def clear_tools():
 def register():
     """Register all MCP tools (called from __init__.py)."""
     # Import and register tools from other modules
-    from . import (
-        blender_tools,
-        polyhaven_tools,
-        rag_tools,
-        selection_tools,
-        sketchfab_tools,
-        web_tools,
-    )
+
+        from . import (
+
+            blender_tools,
+
+            polyhaven_tools,
+
+            rag_tools,
+
+            selection_tools,
+
+            sketchfab_tools,
+
+            stock_photo_tools,
+            web_tools,
+
+        )
+
 
     # Register Blender tools
     blender_tools.register_tools()
@@ -478,12 +488,22 @@ def register():
     # Register web tools
     web_tools.register_tools()
 
+
     # Register Sketchfab tools
+
     sketchfab_tools.register_tools()
+
+
+
+    # Register Stock Photo tools (conditional; registers only if API keys present)
+    if hasattr(stock_photo_tools, "register"):
+
+        stock_photo_tools.register()
 
     # Register RAG tools
     if hasattr(rag_tools, "register"):
         rag_tools.register()
+
 
     print(f"[MCP] Registered {len(_TOOLS)} tools total")
 

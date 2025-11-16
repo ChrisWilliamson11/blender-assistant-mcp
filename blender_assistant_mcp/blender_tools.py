@@ -2491,15 +2491,24 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
 
 
 
+
+
+
+
     Usage examples (tool aliases):
 
-      - "polyhaven.search"       -> search_polyhaven_assets
 
-      - "polyhaven.download"     -> download_polyhaven
 
-      - "blender.get_scene_info" -> get_scene_info
+      - "polyhaven.search"          -> search_polyhaven_assets
 
-      - "blender.list_collections" -> list_collections
+      - "polyhaven.download"        -> download_polyhaven
+
+
+
+      - "blender.get_scene_info"    -> get_scene_info
+
+      - "blender.get_object_info"   -> get_object_info
+      - "blender.list_collections"  -> list_collections
 
       - "blender.get_collection_info" -> get_collection_info
 
@@ -2511,27 +2520,72 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
 
       - "blender.delete_collection" -> delete_collection
 
-      - "blender.get_selection" -> get_selection
+      - "blender.get_selection"     -> get_selection
 
-      - "blender.get_active" -> get_active
+      - "blender.get_active"        -> get_active
 
-      - "blender.set_selection" -> set_selection
+      - "blender.set_selection"     -> set_selection
 
-      - "blender.set_active" -> set_active
+      - "blender.set_active"        -> set_active
 
-      - "blender.select_by_type" -> select_by_type
+
+      - "blender.select_by_type"    -> select_by_type
+
+      - "blender.create_object"     -> create_object
+
+      - "blender.modify_object"     -> modify_object
+
+      - "blender.delete_object"     -> delete_object
+      - "blender.set_material"      -> set_material
+
+      - "vision.capture"            -> capture_viewport_for_vision
+      - "vision.capture_viewport"   -> capture_viewport_for_vision
+
+      - "web.search"                -> web_search
+
+
+      - "web.fetch"                 -> fetch_webpage
+
+      - "web.wikimedia_image"       -> search_wikimedia_image
+      - "web.download_image"        -> download_image_as_texture
+
+      - "sketchfab.login"           -> sketchfab_login
+      - "sketchfab.search"          -> sketchfab_search
+      - "sketchfab.download"        -> sketchfab_download_model
+
+      - "stock_photos.search"       -> search_stock_photos    (requires configured API keys)
+      - "stock_photos.download"     -> download_stock_photo   (requires configured API keys)
+
+      - "rag.query"                 -> rag_query
+      - "rag.get_stats"             -> rag_get_stats
+
+
+
+    Namespace expansion (pass the namespace to list its common tools):
+
+      - "assistant_sdk.web"         -> expands to web.search/fetch/wikimedia_image/download_image
+      - "assistant_sdk.sketchfab"   -> expands to sketchfab.login/search/download
+      - "assistant_sdk.stock_photos"-> expands to stock_photos.search/download
+      - "assistant_sdk.rag"         -> expands to rag.query/get_stats
+      - "assistant_sdk.blender"     -> expands to common blender.* tools
+      - "assistant_sdk"             -> expands to all supported namespaces above
 
 
 
     Also accepts underlying tool names directly (e.g., "get_scene_info").
 
+
+
     """
 
     try:
         # Build list of requested aliases
+
         aliases: list[str] = []
+
         if tools and isinstance(tools, (list, tuple)):
             aliases.extend([str(t).strip() for t in tools if str(t).strip()])
+
         if tool and str(tool).strip():
             aliases.append(str(tool).strip())
 
@@ -2541,8 +2595,10 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
         # Map SDK-like aliases to MCP tool names
 
         alias_map = {
+            # PolyHaven
             "polyhaven.search": "search_polyhaven_assets",
             "polyhaven.download": "download_polyhaven",
+            # Blender
             "blender.get_scene_info": "get_scene_info",
             "blender.get_object_info": "get_object_info",
             "blender.list_collections": "list_collections",
@@ -2556,9 +2612,83 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
             "blender.set_selection": "set_selection",
             "blender.set_active": "set_active",
             "blender.select_by_type": "select_by_type",
+            "blender.create_object": "create_object",
+            "blender.modify_object": "modify_object",
+            "blender.delete_object": "delete_object",
+            "blender.set_material": "set_material",
+            # Vision
+            "vision.capture": "capture_viewport_for_vision",
+            "vision.capture_viewport": "capture_viewport_for_vision",
+            # Web
+            "web.search": "web_search",
+            "web.fetch": "fetch_webpage",
+            "web.wikimedia_image": "search_wikimedia_image",
+            "web.download_image": "download_image_as_texture",
+            # Sketchfab
+            "sketchfab.login": "sketchfab_login",
+            "sketchfab.search": "sketchfab_search",
+            "sketchfab.download": "sketchfab_download_model",
+            # Stock Photos (conditional registration based on API keys)
+            "stock_photos.search": "search_stock_photos",
+            "stock_photos.download": "download_stock_photo",
+            # RAG
+            "rag.query": "rag_query",
+            "rag.get_stats": "rag_get_stats",
+            "rag.stats": "rag_get_stats",
+        }
+
+        # Define namespace expansions (each expands to a list of alias_map keys)
+        namespace_map = {
+            "web": [
+                "web.search",
+                "web.fetch",
+                "web.wikimedia_image",
+                "web.download_image",
+            ],
+            "sketchfab": [
+                "sketchfab.login",
+                "sketchfab.search",
+                "sketchfab.download",
+            ],
+            "stock_photos": [
+                "stock_photos.search",
+                "stock_photos.download",
+            ],
+            "vision": [
+                "vision.capture",
+                "vision.capture_viewport",
+            ],
+            "rag": [
+                "rag.query",
+                "rag.get_stats",
+            ],
+            "polyhaven": [
+                "polyhaven.search",
+                "polyhaven.download",
+            ],
+            "blender": [
+                "blender.get_scene_info",
+                "blender.get_object_info",
+                "blender.list_collections",
+                "blender.get_collection_info",
+                "blender.create_collection",
+                "blender.move_to_collection",
+                "blender.set_collection_color",
+                "blender.delete_collection",
+                "blender.get_selection",
+                "blender.get_active",
+                "blender.set_selection",
+                "blender.set_active",
+                "blender.create_object",
+                "blender.modify_object",
+                "blender.delete_object",
+                "blender.set_material",
+                "blender.select_by_type",
+            ],
         }
 
         # Pull current MCP tool registry
+
         tool_defs = mcp_tools.get_tools_list() or []
 
         names = {
@@ -2568,13 +2698,47 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
         lowered = {k.lower(): k for k in names.keys()}
 
         results = []
+
         unknown = []
 
         for alias in aliases:
-            norm = alias.lower()
+            norm = alias.lower().strip()
+
+            # Strip assistant_sdk. prefix when present
             if norm.startswith("assistant_sdk."):
                 norm = norm[len("assistant_sdk.") :]
 
+            # Namespace expansions (e.g., "web", "sketchfab", "stock_photos", "rag", "blender")
+            # Special case: "assistant_sdk" (top-level) expands to all known namespaces
+            expanded_aliases: list[str] = []
+            if norm in ("assistant_sdk",):
+                # Expand to all supported namespaces
+                for ns, ns_aliases in namespace_map.items():
+                    expanded_aliases.extend(ns_aliases)
+            elif norm in namespace_map:
+                expanded_aliases.extend(namespace_map[norm])
+
+            if expanded_aliases:
+                # Resolve each expanded alias
+                for ns_alias in expanded_aliases:
+                    resolved_name = alias_map.get(ns_alias)
+
+                    if not resolved_name or resolved_name not in names:
+                        continue
+                    t = names[resolved_name]
+
+                    results.append(
+                        {
+                            "tool": resolved_name,
+                            "description": t.get("description", ""),
+                            "inputSchema": t.get("inputSchema", {}),
+                        }
+                    )
+
+                # Done with this alias (do not fall-through to single resolution)
+                continue
+
+            # Single alias resolution path
             resolved = alias_map.get(norm)
             if not resolved:
                 # Try exact or case-insensitive MCP name
@@ -2597,9 +2761,12 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
             )
 
         resp = {"results": results}
+
         if unknown:
             resp["unknown"] = unknown
+
         return resp
+
     except Exception as e:
         return {"error": f"assistant_help failed: {str(e)}"}
 
