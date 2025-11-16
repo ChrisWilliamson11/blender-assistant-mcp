@@ -1,6 +1,6 @@
-"""AI Assistant operator with agentic loop.
+"""Automation Assistant operator with agentic loop.
 
-This module provides the main AI assistant that uses Ollama
+This module provides the main automation assistant that uses Ollama
 to run models locally with full GPU acceleration.
 """
 
@@ -797,73 +797,11 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 except Exception:
                     pass
 
-                # Check if result contains a vision image
-                if isinstance(result, dict) and "image_base64" in result:
-                    # Store image for next LLM call
-                    state["pending_image"] = result["image_base64"]
-                    # Add message without the base64 data (too large for display)
-                    display_result = {
-                        k: v for k, v in result.items() if k != "image_base64"
-                    }
-                    display_result["image"] = (
-                        "[Base64 image captured for vision analysis]"
-                    )
-                    self._add_message(
-                        "Tool",
-                        json.dumps(display_result, indent=2),
-                        tool_name=tool_name,
-                    )
-                else:
-                    self._add_message(
-                        "Tool", json.dumps(result, indent=2), tool_name=tool_name
-                    )
-                # Vision auto-poll: if capture is in progress, queue another poll without consuming a step;
-                # if finished and description is present, surface it as a Tool message for the next turn.
-                if tool_name == "capture_viewport_for_vision" and isinstance(
-                    result, dict
-                ):
-                    # If analysis still running, schedule another poll immediately (same args if provided)
-                    if result.get("in_progress"):
-                        try:
-                            # Preserve original args if provided by model; otherwise default sensible max_size/question
-                            poll_args = {}
-                            try:
-                                # Keep original requested size if present
-                                if isinstance(args, dict) and "max_size" in args:
-                                    poll_args["max_size"] = args.get("max_size", 1024)
-                            except Exception:
-                                pass
-                            try:
-                                if isinstance(args, dict) and "question" in args:
-                                    poll_args["question"] = args.get("question", "")
-                            except Exception:
-                                pass
-                            # Queue the next poll at the front so we continue immediately
-                            queue = state.get("tool_call_queue") or []
-                            state["tool_call_queue"] = [
-                                {
-                                    "tool": "capture_viewport_for_vision",
-                                    "args": poll_args,
-                                }
-                            ] + queue
-                            state["state"] = "EXECUTE_QUEUED"
-                            return
-                        except Exception:
-                            # If anything goes wrong, fall back to normal flow
-                            pass
-                    else:
-                        # Completed vision analysis: inject concise description for the model
-                        desc = (
-                            result.get("description")
-                            or result.get("last_description")
-                            or ""
-                        )
-                        if isinstance(desc, str) and desc.strip():
-                            self._add_message(
-                                "Tool",
-                                desc.strip(),
-                                tool_name="capture_viewport_for_vision",
-                            )
+                self._add_message(
+                    "Tool", json.dumps(result, indent=2), tool_name=tool_name
+                )
+
+                # Vision tool now returns synchronously with textual description; no auto-polling.
 
                 # Detect empty web search results and add hint
                 if tool_name == "web_search" and isinstance(result, dict):
@@ -911,10 +849,14 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 state["state"] = "EXECUTE_QUEUED"
                 return
 
+
             # Start next iteration (inject a brief scene snapshot to keep context fresh)
+
             self._maybe_append_scene_snapshot(context)
             self._start_http_request(context)
+
             return
+
 
         # Fall back to text-based processing
         if not reply:
@@ -1106,26 +1048,9 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 except Exception:
                     pass
 
-                # Check if result contains a vision image
-                if isinstance(result, dict) and "image_base64" in result:
-                    # Store image for next LLM call
-                    state["pending_image"] = result["image_base64"]
-                    # Add message without the base64 data (too large for display)
-                    display_result = {
-                        k: v for k, v in result.items() if k != "image_base64"
-                    }
-                    display_result["image"] = (
-                        "[Base64 image captured for vision analysis]"
-                    )
-                    self._add_message(
-                        "Tool",
-                        json.dumps(display_result, indent=2),
-                        tool_name=tool_name,
-                    )
-                else:
-                    self._add_message(
-                        "Tool", json.dumps(result, indent=2), tool_name=tool_name
-                    )
+                self._add_message(
+                    "Tool", json.dumps(result, indent=2), tool_name=tool_name
+                )
 
                 # Detect empty web search results and add hint
                 if tool_name == "web_search" and isinstance(result, dict):
@@ -1171,10 +1096,14 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 state["state"] = "EXECUTE_QUEUED"
                 return
 
+
             # Start next iteration (inject a brief scene snapshot to keep context fresh)
+
             self._maybe_append_scene_snapshot(context)
             self._start_http_request(context)
+
         else:
+
             # No tool call - conversational response
             self._add_message("Assistant", reply)
             state["state"] = "DONE"
@@ -1336,20 +1265,9 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                     # Skip non-result tool logs (e.g., dedupe notices) from API payload
                     pass
 
-        # If there's a pending image from vision tool, add it to the last user message
-        if state.get("pending_image"):
-            print(f"[DEBUG] Adding vision image to request")
-            # Find the last user message and add image to it
-            for msg in reversed(messages):
-                if msg["role"] == "user":
-                    # Add images array to message (or append if already has images)
-                    if "images" in msg:
-                        msg["images"].append(state["pending_image"])
-                    else:
-                        msg["images"] = [state["pending_image"]]
-                    break
-            # Clear pending image
-            state["pending_image"] = None
+
+
+
 
         print(f"[DEBUG] Starting HTTP request with {len(messages)} messages")
 
@@ -1875,12 +1793,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             "You", user_text, image_data=pending_image if pending_image else None
         )
 
-        # Store pending image in state for HTTP request
-        if pending_image:
-            self._modal_state["pending_image"] = pending_image
-            print(
-                f"[DEBUG] Attached image to message ({len(pending_image)} bytes base64)"
-            )
+        # Image (if any) is attached directly to the chat message; no separate pending image handoff.
 
         # Clear input box and pending image
         try:
@@ -2070,13 +1983,22 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
             auto = getattr(prefs, "auto_scene_snapshot", True) if prefs else True
 
+
+
             if not auto:
+
                 return
 
+
+
             # Persist and reuse fold_state across turns
+
             fold = state.get("snapshot_fold_state") or {}
             # Focus recently touched names
+
             wf = state.get("working_focus") or {"objects": [], "collections": []}
+
+
 
             focus = list((wf.get("collections") or []) + (wf.get("objects") or []))[-8:]
 

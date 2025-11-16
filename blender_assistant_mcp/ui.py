@@ -1,4 +1,4 @@
-"""UI panels and operators for the AI Assistant."""
+"""UI panels and operators for the automation Assistant."""
 
 import bpy
 
@@ -6,7 +6,7 @@ from . import tool_selector
 
 
 class ASSISTANT_PT_panel(bpy.types.Panel):
-    """Main AI Assistant panel in the 3D View sidebar"""
+    """Main automation Assistant panel in the 3D View sidebar"""
 
     bl_idname = "ASSISTANT_PT_panel"
     bl_space_type = "VIEW_3D"

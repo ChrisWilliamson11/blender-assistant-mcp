@@ -192,7 +192,7 @@ def search_wikimedia_image(query: str, apply_to_active: bool = True) -> dict:
     """Search Wikimedia Commons for free images and download as texture.
 
     Wikimedia Commons has: nature photos, textures, historical images, architecture.
-    Does NOT have: modern stock photos, satellite imagery, AI-generated content.
+    Does NOT have: modern stock photos, satellite imagery.
 
     Args:
         query: What to search for (e.g., 'wood grain', 'brick wall', 'mountain landscape', 'Paris aerial')
@@ -504,6 +504,171 @@ def download_image_as_texture(
         return {"error": f"Failed to download image: {str(e)}"}
 
 
+def extract_image_urls(url: str, min_width: int = 400, max_images: int = 10) -> dict:
+    """Fetch a page and extract likely content image URLs (jpg/png/webp).
+
+    Heuristics:
+    - Parse <img>, srcset, og:image, twitter:image, and <link rel="image_src">
+    - Resolve relative URLs against the page URL
+    - Filter out SVGs and likely non-content images (logo/icon/sprite/thumb/avatar)
+    - Use declared width/srcset hints to filter images smaller than min_width when available
+    - Rank by inferred width (desc) and penalize likely non-content terms
+    """
+    try:
+        import re
+        from html import unescape
+        from urllib.parse import urljoin
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+
+        with httpx.Client(follow_redirects=True) as client:
+            resp = client.get(url, headers=headers, timeout=15.0)
+            resp.raise_for_status()
+            html = resp.text
+
+        # Collect candidates
+        candidates: dict[str, dict] = {}
+
+        def add_candidate(
+            raw_url: str, width_hint: int | None = None, source: str = ""
+        ):
+            if not raw_url:
+                return
+            u = unescape(raw_url.strip())
+            # Ignore data URLs
+            if u.lower().startswith("data:"):
+                return
+            # Resolve against page URL
+            u = urljoin(url, u)
+            # Filter by extension
+            ul = u.lower().split("?")[0].split("#")[0]
+            if any(ul.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                # Exclude likely non-content by pattern
+                bad_terms = [
+                    "sprite",
+                    "logo",
+                    "icon",
+                    "avatar",
+                    "thumb",
+                    "thumbnail",
+                    "small",
+                    "tiny",
+                    "pixel",
+                    "badge",
+                ]
+                if any(bt in ul for bt in bad_terms):
+                    penalty = 1
+                else:
+                    penalty = 0
+                # Store best width hint
+                if u in candidates:
+                    prev = candidates[u]
+                    prev_w = prev.get("width_hint") or 0
+                    if (width_hint or 0) > prev_w:
+                        prev["width_hint"] = width_hint or prev_w
+                        prev["penalty"] = penalty
+                        prev["source"] = source or prev.get("source", "")
+                else:
+                    candidates[u] = {
+                        "url": u,
+                        "width_hint": width_hint or 0,
+                        "penalty": penalty,
+                        "source": source,
+                    }
+
+        # Regex helpers
+        img_tag_re = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+        src_re = re.compile(r'\bsrc\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+        width_re = re.compile(r'\bwidth\s*=\s*["\']?(\d{2,5})["\']?', re.IGNORECASE)
+        srcset_re = re.compile(r'\bsrcset\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+
+        for tag in img_tag_re.findall(html):
+            # src
+            m = src_re.search(tag)
+            w_hint = None
+            mw = width_re.search(tag)
+            if mw:
+                try:
+                    w_hint = int(mw.group(1))
+                except Exception:
+                    w_hint = None
+            if m:
+                add_candidate(m.group(1), w_hint, "img")
+            # srcset (take widest)
+            ms = srcset_re.search(tag)
+            if ms:
+                items = [p.strip() for p in ms.group(1).split(",") if p.strip()]
+                best_url = None
+                best_w = 0
+                for it in items:
+                    parts = it.split()
+                    u = parts[0]
+                    w = 0
+                    if len(parts) >= 2 and parts[1].lower().endswith("w"):
+                        try:
+                            w = int(re.sub(r"[^\d]", "", parts[1]))
+                        except Exception:
+                            w = 0
+                    if w > best_w:
+                        best_w = w
+                        best_url = u
+                if best_url:
+                    add_candidate(best_url, max(best_w, w_hint or 0), "srcset")
+
+        # OpenGraph/Twitter
+        for prop in ["og:image", "twitter:image", "twitter:image:src"]:
+            for m in re.finditer(
+                rf'<meta[^>]+(?:property|name)=["\']{prop}["\'][^>]+content=["\']([^"\']+)["\']',
+                html,
+                re.IGNORECASE,
+            ):
+                add_candidate(m.group(1), None, prop)
+
+        # <link rel="image_src" href="...">
+        for m in re.finditer(
+            r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']',
+            html,
+            re.IGNORECASE,
+        ):
+            add_candidate(m.group(1), None, "link:image_src")
+
+        # Filter by min_width when we have hints, and remove duplicates while preserving ranking
+        items = list(candidates.values())
+
+        def score(it: dict) -> tuple:
+            w = it.get("width_hint") or 0
+            pen = it.get("penalty") or 0
+            # Prefer larger widths; penalize likely non-content
+            return (-w, pen)
+
+        # Apply min_width filter if width hints exist; otherwise rely on penalties only
+        filtered = []
+        for it in items:
+            w = it.get("width_hint") or 0
+            if w and w < int(min_width):
+                continue
+            filtered.append(it)
+        # Sort and clip
+        filtered.sort(key=score)
+        top = filtered[: max(1, int(max_images))]
+        urls = [it["url"] for it in top]
+
+        return {
+            "success": True,
+            "url": url,
+            "count": len(urls),
+            "images": urls,
+        }
+    except httpx.TimeoutException:
+        return {"error": f"Request timed out while fetching {url}"}
+    except httpx.HTTPStatusError as e:
+        return {"error": f"HTTP error {e.response.status_code} while fetching {url}"}
+    except Exception as e:
+        return {"error": f"Failed to extract images: {str(e)}"}
+
+
 def register_tools():
     """Register all web tools with the MCP registry."""
 
@@ -570,6 +735,37 @@ def register_tools():
                     "default": 10000,
                     "minimum": 1000,
                     "maximum": 50000,
+                },
+            },
+            "required": ["url"],
+        },
+        category="Web",
+    )
+
+    mcp_tools.register_tool(
+        "extract_image_urls",
+        extract_image_urls,
+        "Extract likely content image URLs from a webpage (jpg/png/webp). Filters out tiny/logos/sprites and returns top N.",
+        {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Webpage URL to analyze",
+                },
+                "min_width": {
+                    "type": "integer",
+                    "description": "Minimum width to consider (uses HTML hints when available)",
+                    "default": 400,
+                    "minimum": 1,
+                    "maximum": 4096,
+                },
+                "max_images": {
+                    "type": "integer",
+                    "description": "Maximum number of image URLs to return",
+                    "default": 10,
+                    "minimum": 1,
+                    "maximum": 50,
                 },
             },
             "required": ["url"],

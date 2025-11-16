@@ -1570,89 +1570,54 @@ def execute_code(code: str) -> dict:
         return result
 
 
-def capture_viewport_for_vision(max_size: int = 1024, question: str = "") -> dict:
-    """Non-blocking viewport screenshot + background VLM analysis.
+def capture_viewport_for_vision(
+    question: str,
+    max_size: int = 1024,
+    vision_model: str = "",
+    timeout_s: int = 15,
+) -> dict:
+    """Synchronously capture the viewport and run a dedicated vision model.
 
     Behavior:
-    - If an analysis is already in progress, return in_progress=True and the last partial description.
-    - Otherwise capture the viewport (UI thread opengl still) → start background VLM analysis (no UI blocking) and return immediately with in_progress=True.
-    - Subsequent calls (while active) report progress; when done, return in_progress=False and the final description.
+    - Captures the current viewport and scales it to max_size if needed.
+    - Calls the configured vision model with the image and the provided question.
+    - Returns a single result with textual description and metadata.
+    - Never returns the image and never sends images to the chat model.
 
     Args:
+        question: Instruction for the vision model (what to analyze).
         max_size: Max width/height for the screenshot.
-        question: Optional instruction for the vision model (what to look for). If empty, a default prompt is used.
+        vision_model: Optional override model name (uses preferences if empty).
+        timeout_s: Max seconds to wait for the vision analysis.
 
     Returns:
-        dict with keys like:
+        dict with keys:
             success: bool
-            in_progress: bool
-            message: str
+            description: str
             original_resolution: [w,h]
             scaled_resolution: [w,h]
             viewport_info: { ... }
-            last_description: str (while running) or description: str (when finished)
-            image_base64: str (only on capture kick-off, so the model can also use it if desired)
-            vision_model: str (when known)
+            vision_model: str
     """
     import base64
-    import tempfile
     import threading
 
-    # Lazy-init module-level task state
-    global _vision_task
     try:
-        _vision_task  # type: ignore[name-defined]
-    except NameError:
-        _vision_task = {
-            "active": False,
-            "thread": None,
-            "last": "",
-            "error": None,
-            "model": "",
-        }
-
-    # If a background analysis is already running, just report status (no new capture)
-    if _vision_task.get("active"):
-        return {
-            "success": True,
-            "in_progress": True,
-            "message": "Vision analysis in progress",
-            "last_description": _vision_task.get("last", ""),
-            "vision_model": _vision_task.get("model", ""),
-        }
-
-    # If we have a finished description and no new request, surface it
-    if _vision_task.get("last") and not question:
-        return {
-            "success": True,
-            "in_progress": False,
-            "description": _vision_task.get("last", ""),
-            "vision_model": _vision_task.get("model", ""),
-        }
-
-    try:
-        # Create temporary file for screenshot
+        import tempfile
 
         temp_dir = tempfile.gettempdir()
-
         temp_path = os.path.join(temp_dir, "blender_viewport_vision.png")
 
         # Capture viewport (UI thread operation)
-
         scene = bpy.context.scene
-
         prev_fp = scene.render.filepath
-
         scene.render.filepath = temp_path
-
         try:
             bpy.ops.render.opengl(write_still=True)
-
         finally:
             scene.render.filepath = prev_fp
 
         # Load and scale image
-
         if not os.path.exists(temp_path):
             return {"error": "Failed to capture viewport"}
 
@@ -1660,153 +1625,132 @@ def capture_viewport_for_vision(max_size: int = 1024, question: str = "") -> dic
 
         try:
             original_width = img.size[0]
-
             original_height = img.size[1]
 
             if original_width > max_size or original_height > max_size:
-                if original_width > original_height:
+                if original_width >= original_height:
                     new_width = max_size
-
                     new_height = int(original_height * (max_size / original_width))
-
                 else:
                     new_height = max_size
-
                     new_width = int(original_width * (max_size / original_height))
-
                 img.scale(new_width, new_height)
-
                 img.save_render(temp_path)
-
             else:
                 new_width = original_width
-
                 new_height = original_height
 
-            # Read and encode as base64
-
+            # Read and encode as base64 for the VLM call only (not returned)
             with open(temp_path, "rb") as f:
                 image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
             # Clean up Blender image datablock
-
             bpy.data.images.remove(img)
 
             # Viewport info
             area = None
-
             for a in bpy.context.screen.areas:
                 if a.type == "VIEW_3D":
                     area = a
-
                     break
 
             viewport_info = {}
-
             if area:
                 space = area.spaces.active
-
                 viewport_info = {
                     "shading": space.shading.type,
                     "overlay": space.overlay.show_overlays,
                     "camera_view": space.region_3d.view_perspective == "CAMERA",
                 }
 
-            # Resolve vision model from preferences
-            model_name = ""
+            # Resolve vision model from preferences or override
+            model_name = vision_model or ""
             try:
-                addon = bpy.context.preferences.addons.get(__package__)
-                prefs = addon.preferences if addon else None
-                # Prefer dedicated vision model, fallback to active chat model
-                model_name = getattr(prefs, "vision_model", "") or getattr(
-                    prefs, "model_file", ""
-                )
+                if not model_name:
+                    addon = bpy.context.preferences.addons.get(__package__)
+                    prefs = addon.preferences if addon else None
+                    # Prefer dedicated vision model, fallback to active chat model
+                    model_name = getattr(prefs, "vision_model", "") or getattr(
+                        prefs, "model_file", ""
+                    )
             except Exception:
-                model_name = ""
+                pass
 
             if not model_name or model_name == "NONE":
-                # Return the capture so the model can still use the image, but warn missing model
                 return {
-                    "success": True,
-                    "in_progress": False,
-                    "warning": "Vision model not set. Configure a vision-capable model in preferences.",
-                    "image_base64": image_b64,
+                    "error": "Vision model not set. Configure a vision-capable model in preferences or pass vision_model.",
                     "original_resolution": [original_width, original_height],
                     "scaled_resolution": [new_width, new_height],
                     "viewport_info": viewport_info,
                 }
 
-            # Background analysis worker
-            def _analyze_vision(img_b64: str, q: str, model: str):
-                global _vision_task
+            prompt = (
+                (question or "").strip()
+                or "Provide a concise description of the viewport contents (objects, layout, materials, lighting)."
+            )
+
+            # Call the VLM with a bounded wait using a worker thread
+            result_box = {"resp": None, "err": None}
+
+            def _call_vlm():
                 try:
                     from . import ollama_adapter as llama_manager
 
-                    prompt = (
-                        q.strip()
-                        or "Provide a concise description of the viewport contents (objects, layout, materials, lighting)."
-                    )
                     messages = [
                         {
                             "role": "user",
                             "content": prompt,
-                            "images": [img_b64],
+                            "images": [image_b64],
                         }
                     ]
-                    resp = llama_manager.chat_completion(
-                        model_path=model,
+                    result_box["resp"] = llama_manager.chat_completion(
+                        model_path=model_name,
                         messages=messages,
                         temperature=0.1,
                         max_tokens=1024,
                     )
-                    # Extract description text
-                    desc = ""
-                    if isinstance(resp, dict):
-                        if "message" in resp and isinstance(resp["message"], dict):
-                            desc = resp["message"].get("content", "") or ""
-                        elif "content" in resp:
-                            desc = resp.get("content", "") or ""
-                    _vision_task["last"] = (desc or "").strip()
-                    _vision_task["error"] = None
                 except Exception as e:
-                    _vision_task["error"] = str(e)
-                    _vision_task["last"] = ""
-                finally:
-                    _vision_task["active"] = False
+                    result_box["err"] = str(e)
 
-            # Kick off background analysis (non-UI-blocking)
-            _vision_task["active"] = True
-            _vision_task["model"] = model_name
-            _vision_task["last"] = _vision_task.get("last", "")
-            _vision_task["error"] = None
-            th = threading.Thread(
-                target=_analyze_vision,
-                args=(image_b64, question or "", model_name),
-                daemon=True,
-            )
-            _vision_task["thread"] = th
+            th = threading.Thread(target=_call_vlm, daemon=True)
             th.start()
+            th.join(max(1, int(timeout_s)))
 
-            # Return immediate status so the LLM can poll until in_progress=False
+            if th.is_alive():
+                # Keep thread daemon; return timeout error without image
+                return {
+                    "error": f"Vision analysis timed out after {timeout_s}s",
+                    "original_resolution": [original_width, original_height],
+                    "scaled_resolution": [new_width, new_height],
+                    "viewport_info": viewport_info,
+                    "vision_model": model_name,
+                }
+
+            if result_box["err"]:
+                return {"error": f"Vision analysis failed: {result_box['err']}"}
+
+            resp = result_box["resp"] or {}
+            desc = ""
+            if isinstance(resp, dict):
+                if "message" in resp and isinstance(resp["message"], dict):
+                    desc = resp["message"].get("content", "") or ""
+                elif "content" in resp:
+                    desc = resp.get("content", "") or ""
+
             return {
                 "success": True,
-                "in_progress": True,
-                "message": f"Captured viewport at {new_width}x{new_height}. Shading: {viewport_info.get('shading', 'unknown')} — starting vision analysis",
-                "image_base64": image_b64,
+                "description": (desc or "").strip(),
                 "original_resolution": [original_width, original_height],
                 "scaled_resolution": [new_width, new_height],
                 "viewport_info": viewport_info,
-                "last_description": _vision_task.get("last", ""),
                 "vision_model": model_name,
             }
 
         finally:
             # Clean up temp file
-
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-
                 except Exception:
                     pass
 
@@ -1814,7 +1758,7 @@ def capture_viewport_for_vision(max_size: int = 1024, question: str = "") -> dic
         import traceback
 
         return {
-            "error": f"Failed to capture/launch vision analysis: {str(e)}",
+            "error": f"Failed to capture/analyze vision: {str(e)}",
             "traceback": traceback.format_exc(),
         }
 
@@ -2489,111 +2433,70 @@ def set_collections_color_batch(
 def assistant_help(tool: str = "", tools: list | None = None) -> dict:
     """Return JSON Schemas for one or more assistant_sdk tool aliases.
 
-
-
-
-
-
-
     Usage examples (tool aliases):
 
+      - "polyhaven.search"            -> search_polyhaven_assets
+      - "polyhaven.download"          -> download_polyhaven
 
-
-      - "polyhaven.search"          -> search_polyhaven_assets
-
-      - "polyhaven.download"        -> download_polyhaven
-
-
-
-      - "blender.get_scene_info"    -> get_scene_info
-
-      - "blender.get_object_info"   -> get_object_info
-      - "blender.list_collections"  -> list_collections
-
+      - "blender.get_scene_info"      -> get_scene_info
+      - "blender.get_object_info"     -> get_object_info
+      - "blender.list_collections"    -> list_collections
       - "blender.get_collection_info" -> get_collection_info
+      - "blender.create_collection"   -> create_collection
+      - "blender.move_to_collection"  -> move_to_collection
+      - "blender.set_collection_color"-> set_collection_color
+      - "blender.delete_collection"   -> delete_collection
+      - "blender.get_selection"       -> get_selection
+      - "blender.get_active"          -> get_active
+      - "blender.set_selection"       -> set_selection
+      - "blender.set_active"          -> set_active
+      - "blender.select_by_type"      -> select_by_type
+      - "blender.create_object"       -> create_object
+      - "blender.modify_object"       -> modify_object
+      - "blender.delete_object"       -> delete_object
+      - "blender.set_material"        -> set_material
 
-      - "blender.create_collection" -> create_collection
+      - "vision.capture"              -> capture_viewport_for_vision
+      - "vision.capture_viewport"     -> capture_viewport_for_vision
 
-      - "blender.move_to_collection" -> move_to_collection
+      - "web.search"                  -> web_search
+      - "web.fetch"                   -> fetch_webpage
+      - "web.extract_image_urls"      -> extract_image_urls
+      - "web.wikimedia_image"         -> search_wikimedia_image
+      - "web.download_image"          -> download_image_as_texture
 
-      - "blender.set_collection_color" -> set_collection_color
+      - "sketchfab.login"             -> sketchfab_login
+      - "sketchfab.search"            -> sketchfab_search
+      - "sketchfab.download"          -> sketchfab_download_model
 
-      - "blender.delete_collection" -> delete_collection
+      - "stock_photos.search"         -> search_stock_photos    (requires configured API keys)
+      - "stock_photos.download"       -> download_stock_photo   (requires configured API keys)
 
-      - "blender.get_selection"     -> get_selection
-
-      - "blender.get_active"        -> get_active
-
-      - "blender.set_selection"     -> set_selection
-
-      - "blender.set_active"        -> set_active
-
-
-      - "blender.select_by_type"    -> select_by_type
-
-      - "blender.create_object"     -> create_object
-
-      - "blender.modify_object"     -> modify_object
-
-      - "blender.delete_object"     -> delete_object
-      - "blender.set_material"      -> set_material
-
-      - "vision.capture"            -> capture_viewport_for_vision
-      - "vision.capture_viewport"   -> capture_viewport_for_vision
-
-      - "web.search"                -> web_search
-
-
-      - "web.fetch"                 -> fetch_webpage
-
-      - "web.wikimedia_image"       -> search_wikimedia_image
-      - "web.download_image"        -> download_image_as_texture
-
-      - "sketchfab.login"           -> sketchfab_login
-      - "sketchfab.search"          -> sketchfab_search
-      - "sketchfab.download"        -> sketchfab_download_model
-
-      - "stock_photos.search"       -> search_stock_photos    (requires configured API keys)
-      - "stock_photos.download"     -> download_stock_photo   (requires configured API keys)
-
-      - "rag.query"                 -> rag_query
-      - "rag.get_stats"             -> rag_get_stats
-
-
+      - "rag.query"                   -> rag_query
+      - "rag.get_stats"               -> rag_get_stats
 
     Namespace expansion (pass the namespace to list its common tools):
 
-      - "assistant_sdk.web"         -> expands to web.search/fetch/wikimedia_image/download_image
-      - "assistant_sdk.sketchfab"   -> expands to sketchfab.login/search/download
-      - "assistant_sdk.stock_photos"-> expands to stock_photos.search/download
-      - "assistant_sdk.rag"         -> expands to rag.query/get_stats
-      - "assistant_sdk.blender"     -> expands to common blender.* tools
-      - "assistant_sdk"             -> expands to all supported namespaces above
-
-
+      - "assistant_sdk.web"           -> expands to web.search/fetch/extract_image_urls/wikimedia_image/download_image
+      - "assistant_sdk.sketchfab"     -> expands to sketchfab.login/search/download
+      - "assistant_sdk.stock_photos"  -> expands to stock_photos.search/download
+      - "assistant_sdk.rag"           -> expands to rag.query/get_stats
+      - "assistant_sdk.blender"       -> expands to common blender.* tools
+      - "assistant_sdk"               -> expands to all supported namespaces above
 
     Also accepts underlying tool names directly (e.g., "get_scene_info").
-
-
-
     """
-
     try:
         # Build list of requested aliases
-
         aliases: list[str] = []
-
         if tools and isinstance(tools, (list, tuple)):
             aliases.extend([str(t).strip() for t in tools if str(t).strip()])
-
         if tool and str(tool).strip():
             aliases.append(str(tool).strip())
-
         if not aliases:
             return {"error": "Missing 'tool' or 'tools' parameter"}
 
         # Map SDK-like aliases to MCP tool names
-
         alias_map = {
             # PolyHaven
             "polyhaven.search": "search_polyhaven_assets",
@@ -2622,6 +2525,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
             # Web
             "web.search": "web_search",
             "web.fetch": "fetch_webpage",
+            "web.extract_image_urls": "extract_image_urls",
             "web.wikimedia_image": "search_wikimedia_image",
             "web.download_image": "download_image_as_texture",
             # Sketchfab
@@ -2642,6 +2546,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
             "web": [
                 "web.search",
                 "web.fetch",
+                "web.extract_image_urls",
                 "web.wikimedia_image",
                 "web.download_image",
             ],
@@ -2688,19 +2593,13 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
         }
 
         # Pull current MCP tool registry
-
         tool_defs = mcp_tools.get_tools_list() or []
-
         names = {
             t.get("name"): t for t in tool_defs if isinstance(t, dict) and t.get("name")
         }
-
         lowered = {k.lower(): k for k in names.keys()}
 
         results = []
-
-        unknown = []
-
         for alias in aliases:
             norm = alias.lower().strip()
 
@@ -2709,24 +2608,19 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                 norm = norm[len("assistant_sdk.") :]
 
             # Namespace expansions (e.g., "web", "sketchfab", "stock_photos", "rag", "blender")
-            # Special case: "assistant_sdk" (top-level) expands to all known namespaces
             expanded_aliases: list[str] = []
             if norm in ("assistant_sdk",):
-                # Expand to all supported namespaces
-                for ns, ns_aliases in namespace_map.items():
+                for ns_aliases in namespace_map.values():
                     expanded_aliases.extend(ns_aliases)
             elif norm in namespace_map:
                 expanded_aliases.extend(namespace_map[norm])
 
             if expanded_aliases:
-                # Resolve each expanded alias
                 for ns_alias in expanded_aliases:
                     resolved_name = alias_map.get(ns_alias)
-
                     if not resolved_name or resolved_name not in names:
                         continue
                     t = names[resolved_name]
-
                     results.append(
                         {
                             "tool": resolved_name,
@@ -2734,8 +2628,6 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                             "inputSchema": t.get("inputSchema", {}),
                         }
                     )
-
-                # Done with this alias (do not fall-through to single resolution)
                 continue
 
             # Single alias resolution path
@@ -2746,9 +2638,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                     resolved = alias
                 elif norm in lowered:
                     resolved = lowered[norm]
-
             if not resolved or resolved not in names:
-                unknown.append(alias)
                 continue
 
             t = names[resolved]
@@ -2760,12 +2650,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                 }
             )
 
-        resp = {"results": results}
-
-        if unknown:
-            resp["unknown"] = unknown
-
-        return resp
+        return {"results": results}
 
     except Exception as e:
         return {"error": f"assistant_help failed: {str(e)}"}
@@ -3038,23 +2923,18 @@ def register_tools():
     mcp_tools.register_tool(
         "capture_viewport_for_vision",
         capture_viewport_for_vision,
-        "Capture the current viewport and (optionally) run a vision model to answer a specific question about the image. Returns the model's description/answer.",
+        "Synchronously capture the current viewport and run a vision model to answer a question about the scene. Returns only the textual description and metadata (no image).",
         {
             "type": "object",
             "properties": {
                 "question": {
                     "type": "string",
-                    "description": "What to analyze in the captured viewport image (e.g., 'Are there 9 cubes? Label them.'). If empty, no VLM is run (capture-only).",
+                    "description": "What to analyze in the captured viewport image (e.g., 'Are there 9 cubes? Label them.').",
                 },
                 "max_size": {
                     "type": "integer",
                     "description": "Max width/height in pixels for the captured image",
                     "default": 1024,
-                },
-                "return_image": {
-                    "type": "boolean",
-                    "description": "Include base64 image in the result (useful only with multimodal LLMs)",
-                    "default": false,
                 },
                 "vision_model": {
                     "type": "string",
@@ -3068,7 +2948,7 @@ def register_tools():
                     "maximum": 120,
                 },
             },
-            "required": [],
+            "required": ["question"],
         },
         category="Vision",
     )
