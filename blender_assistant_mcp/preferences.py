@@ -1671,6 +1671,91 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         api_col.label(text="  • Unsplash: unsplash.com/developers")
         api_col.label(text="  • Pexels: pexels.com/api")
 
+    def _draw_tools_settings(self, layout):
+        """Draw tools configuration section."""
+        from . import mcp_tools
+
+        tools_box = layout.box()
+        tools_box.label(text="Schema-Based Tools Configuration", icon="TOOL_SETTINGS")
+
+        tools_col = tools_box.column(align=True)
+        tools_col.label(
+            text="Configure which tools are exposed to the LLM via OpenAI schema:",
+            icon="INFO",
+        )
+        tools_col.separator()
+
+        # Parse current tools list
+        import json
+
+        try:
+            current_tools = json.loads(self.schema_tools)
+            tools_count = len(current_tools) if isinstance(current_tools, list) else 0
+        except Exception:
+            current_tools = []
+            tools_count = 0
+
+        # Show current tool count
+        row = tools_col.row(align=True)
+        row.label(text=f"Current: {tools_count} tools enabled", icon="CHECKBOX_HLT")
+
+        # JSON editor for schema_tools
+        tools_col.separator()
+        tools_col.prop(self, "schema_tools", text="Tools List (JSON)")
+
+        # Quick preset buttons
+        tools_col.separator()
+        tools_col.label(text="Quick Presets:", icon="PRESET")
+        preset_row = tools_col.row(align=True)
+
+        op = preset_row.operator("assistant.set_tool_preset", text="Lean (Default)")
+        op.preset = "lean"
+
+        op = preset_row.operator("assistant.set_tool_preset", text="Core Only")
+        op.preset = "core"
+
+        op = preset_row.operator("assistant.set_tool_preset", text="All Tools")
+        op.preset = "all"
+
+        # Show available tools from registry
+        tools_col.separator()
+        tools_col.label(text="Available Tools in Registry:", icon="DOCUMENTS")
+
+        try:
+            all_tools = mcp_tools.get_tools_list()
+            tools_by_category = {}
+            for tool in all_tools:
+                name = tool.get("name", "")
+                category = tool.get("category", "Other")
+                if category not in tools_by_category:
+                    tools_by_category[category] = []
+                tools_by_category[category].append(name)
+
+            # Display by category
+            info_col = tools_col.column(align=True)
+            for category in sorted(tools_by_category.keys()):
+                tool_names = sorted(tools_by_category[category])
+                enabled_in_category = [t for t in tool_names if t in current_tools]
+                info_col.label(
+                    text=f"  {category}: {len(enabled_in_category)}/{len(tool_names)} enabled"
+                )
+
+        except Exception as e:
+            tools_col.label(text=f"Could not load tools: {e}", icon="ERROR")
+
+        tools_col.separator()
+        tools_col.label(
+            text="Note: execute_code is always included regardless of this setting.",
+            icon="KEYFRAME_HLT",
+        )
+
+    # Schema-based tools configuration (replaces UI tool selector)
+    schema_tools: bpy.props.StringProperty(
+        name="Schema Tools",
+        description="JSON list of tool names to expose via OpenAI-style tools schema",
+        default='["execute_code", "get_scene_info", "get_object_info", "list_collections", "get_collection_info", "create_collection", "move_to_collection", "set_collection_color", "delete_collection", "get_selection", "get_active", "set_selection", "set_active", "select_by_type", "assistant_help", "capture_viewport_for_vision"]',
+    )
+
     # Collapsible section toggles
     show_section_models: bpy.props.BoolProperty(
         name="Show Model Management", default=True
@@ -1684,6 +1769,9 @@ class AssistantPreferences(bpy.types.AddonPreferences):
     )
     show_section_rag: bpy.props.BoolProperty(name="Show RAG Settings", default=True)
     show_section_api: bpy.props.BoolProperty(name="Show Stock Photo APIs", default=True)
+    show_section_tools: bpy.props.BoolProperty(
+        name="Show Tools Configuration", default=False
+    )
 
     def draw(self, context):
         """Draw preferences UI"""
@@ -1767,6 +1855,75 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         if self.show_section_api:
             self._draw_api_keys(layout)
 
+        # Tools Configuration (collapsible)
+        row = layout.row(align=True)
+        row.prop(
+            self,
+            "show_section_tools",
+            text="",
+            icon="TRIA_DOWN" if self.show_section_tools else "TRIA_RIGHT",
+            emboss=False,
+        )
+        row.label(text="Tools Configuration (Advanced)", icon="TOOL_SETTINGS")
+        if self.show_section_tools:
+            self._draw_tools_settings(layout)
+
+
+# Operator to set tool presets
+class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
+    bl_idname = "assistant.set_tool_preset"
+    bl_label = "Set Tool Preset"
+    bl_description = "Set a predefined tool configuration"
+
+    preset: bpy.props.StringProperty()
+
+    def execute(self, context):
+        import json
+
+        from . import mcp_tools
+
+        prefs = context.preferences.addons[__package__].preferences
+
+        if self.preset == "lean":
+            # Default lean tool set - core Blender operations
+            tools = [
+                "execute_code",
+                "get_scene_info",
+                "get_object_info",
+                "list_collections",
+                "get_collection_info",
+                "create_collection",
+                "move_to_collection",
+                "set_collection_color",
+                "delete_collection",
+                "get_selection",
+                "get_active",
+                "set_selection",
+                "set_active",
+                "select_by_type",
+                "assistant_help",
+                "capture_viewport_for_vision",
+            ]
+        elif self.preset == "core":
+            # Minimal core set - just code execution and scene info
+            tools = [
+                "execute_code",
+                "get_scene_info",
+                "get_object_info",
+                "assistant_help",
+            ]
+        elif self.preset == "all":
+            # All registered tools
+            all_tools = mcp_tools.get_tools_list()
+            tools = [t.get("name") for t in all_tools if t.get("name")]
+        else:
+            self.report({"ERROR"}, f"Unknown preset: {self.preset}")
+            return {"CANCELLED"}
+
+        prefs.schema_tools = json.dumps(tools)
+        self.report({"INFO"}, f"Set {len(tools)} tools from preset '{self.preset}'")
+        return {"FINISHED"}
+
 
 def register():
     """Register preferences and operators, auto-scan for Ollama models."""
@@ -1780,6 +1937,7 @@ def register():
     bpy.utils.register_class(ASSISTANT_OT_search_ollama_library)
 
     bpy.utils.register_class(ASSISTANT_OT_toggle_model_capability)
+    bpy.utils.register_class(ASSISTANT_OT_set_tool_preset)
 
     bpy.utils.register_class(AssistantPreferences)
 
@@ -1817,11 +1975,12 @@ def register():
 def unregister():
     """Unregister preferences and operators."""
     bpy.utils.unregister_class(AssistantPreferences)
+    bpy.utils.unregister_class(ASSISTANT_OT_set_tool_preset)
+    bpy.utils.unregister_class(ASSISTANT_OT_toggle_model_capability)
     bpy.utils.unregister_class(ASSISTANT_OT_search_ollama_library)
     bpy.utils.unregister_class(ASSISTANT_OT_open_ollama_folder)
     bpy.utils.unregister_class(ASSISTANT_OT_stop_ollama)
     bpy.utils.unregister_class(ASSISTANT_OT_start_ollama)
     bpy.utils.unregister_class(ASSISTANT_OT_delete_model)
     bpy.utils.unregister_class(ASSISTANT_OT_pull_model)
-
-    bpy.utils.unregister_class(ASSISTANT_OT_toggle_model_capability)
+    bpy.utils.unregister_class(ASSISTANT_OT_refresh_models)

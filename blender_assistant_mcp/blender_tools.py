@@ -56,35 +56,62 @@ def get_scene_info(
     def path_join(*parts) -> str:
         return "/".join([p for p in parts if p])
 
-    # Helper: presence icons for an object
     def object_icons(obj) -> list[str]:
         icons = []
+
         # Type icon (basic set)
+
         t = (getattr(obj, "type", "") or "").upper()
+
         type_map = {
             "MESH": "M",
-            "ARMATURE": "A",
+            "ARMATURE": "AR",
             "LIGHT": "Lt",
             "CAMERA": "Cam",
             "CURVE": "Cur",
             "EMPTY": "E",
         }
+
         if t in type_map:
             icons.append(type_map[t])
+
         # Modifiers, Materials, Children presence
+
         try:
             if getattr(obj, "modifiers", None) and len(obj.modifiers) > 0:
                 icons.append("Mo")
+
         except Exception:
             pass
+
         try:
             if getattr(obj.data, "materials", None) and len(obj.data.materials) > 0:
                 icons.append("Mat")
+
         except Exception:
             pass
+
         try:
             if len(getattr(obj, "children", []) or []) > 0:
                 icons.append("Ch")
+
+        except Exception:
+            pass
+
+        # Selection and Active indicators (avoid [A] conflict with ARMATURE type icon)
+        try:
+            if hasattr(obj, "select_get") and obj.select_get():
+                if "S" not in icons:
+                    icons.append("S")
+        except Exception:
+            pass
+        try:
+            # Only add [A] if 'A' is not already reserved in type_map (ARMATURE)
+            import bpy
+
+            if bpy.context and bpy.context.active_object is obj:
+                if "A" not in type_map.values() and "A" not in icons:
+                    icons.append("A")
         except Exception:
             pass
         return icons
@@ -142,12 +169,13 @@ def get_scene_info(
         if include_icons:
             type_map = {
                 "MESH": "M",
-                "ARMATURE": "A",
+                "ARMATURE": "AR",
                 "LIGHT": "Lt",
                 "CAMERA": "Cam",
                 "CURVE": "Cur",
                 "EMPTY": "E",
             }
+
             for k, v in counts.items():
                 if k in type_map and v > 0 and type_map[k] not in icons:
                     icons.append(type_map[k])
@@ -749,7 +777,6 @@ class _AssistantSDK:
     def call(self, name: str, **kwargs):
         return mcp_tools.execute_tool(name, kwargs)
 
-    def help(self):
         return (
             "assistant_sdk quick reference:\n"
             "- blender.get_scene_info(expand_depth=1, expand=[], focus=[], fold_state=None, max_children=50, include_icons=True, include_counts=True)\n"
@@ -769,6 +796,7 @@ class _AssistantSDK:
             "- stock_photos.search(source, query, per_page=10, orientation=''); stock_photos.download(source, photo_id, apply_as_texture=True)\n"
             "- web.search(query, num_results=5)\n"
             "- rag.query(query, num_results=5, prefer_source=None, page_types=None, excerpt_chars=600); rag.get_stats()\n"
+            "\nOutliner Icon Legend: [M]=Mesh, [AR]=Armature, [Lt]=Light, [Cam]=Camera, [Cur]=Curve, [E]=Empty, [Mo]=Has modifiers, [Mat]=Has material(s), [Ch]=Has children, [S]=Selected, [A]=Active object\n"
         )
 
     class _Polyhaven:

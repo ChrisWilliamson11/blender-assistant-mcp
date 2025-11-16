@@ -133,41 +133,43 @@ def build_system_prompt() -> str:
 
 
 def build_openai_tools() -> list:
-    """Build OpenAI-style tools list from MCP registry using a fixed code-first tool set."""
-    from . import tool_selector
+    """Build OpenAI-style tools list from MCP registry using schema-based tools from preferences."""
+    import json
 
-    code_first_cap = {
-        "execute_code",
-        "get_scene_info",
-        "get_object_info",
-        "list_collections",
-        "get_collection_info",
-        "create_collection",
-        "move_to_collection",
-        "set_collection_color",
-        "delete_collection",
-        "get_selection",
-        "get_active",
-        "set_selection",
-        "set_active",
-        "select_by_type",
-        "assistant_help",
-        "capture_viewport_for_vision",
-    }
+    import bpy
 
-    # Intersect with Tool Selector if present
+    # Get tools list from preferences
     try:
-        enabled_tools = tool_selector.get_enabled_tools() or []
+        prefs = bpy.context.preferences.addons[__package__].preferences
+        schema_tools_json = getattr(prefs, "schema_tools", "[]")
+        schema_tools = json.loads(schema_tools_json)
+        if not isinstance(schema_tools, list):
+            schema_tools = []
+    except Exception as e:
+        print(f"[DEBUG] Failed to load schema_tools from preferences: {e}")
+        # Fallback to default lean toolset
+        schema_tools = [
+            "execute_code",
+            "get_scene_info",
+            "get_object_info",
+            "list_collections",
+            "get_collection_info",
+            "create_collection",
+            "move_to_collection",
+            "set_collection_color",
+            "delete_collection",
+            "get_selection",
+            "get_active",
+            "set_selection",
+            "set_active",
+            "select_by_type",
+            "assistant_help",
+            "capture_viewport_for_vision",
+        ]
 
-    except Exception:
-        enabled_tools = []
-
-    allowed_set = (
-        set(code_first_cap)
-        if not enabled_tools
-        else (set(code_first_cap) & set(enabled_tools))
-    )
-    # Ensure execute_code is always included regardless of Tool Selector
+    # Build allowed set from schema_tools
+    allowed_set = set(schema_tools)
+    # Ensure execute_code is always included
     allowed_set.add("execute_code")
 
     tools = []
@@ -191,6 +193,52 @@ def build_openai_tools() -> list:
         print(f"[DEBUG] Failed to build tools list: {e}")
 
     return tools
+
+
+def get_schema_tools() -> list:
+    """Get the list of schema-based tools from preferences.
+
+    Returns:
+        List of tool names enabled in preferences schema_tools setting.
+        Falls back to default lean toolset if preferences can't be loaded.
+    """
+    import json
+
+    import bpy
+
+    try:
+        prefs = bpy.context.preferences.addons[__package__].preferences
+        schema_tools_json = getattr(prefs, "schema_tools", "[]")
+        schema_tools = json.loads(schema_tools_json)
+        if not isinstance(schema_tools, list):
+            schema_tools = []
+
+        # Ensure execute_code is always included
+        if "execute_code" not in schema_tools:
+            schema_tools.append("execute_code")
+
+        return schema_tools
+    except Exception as e:
+        print(f"[DEBUG] Failed to load schema_tools from preferences: {e}")
+        # Fallback to default lean toolset
+        return [
+            "execute_code",
+            "get_scene_info",
+            "get_object_info",
+            "list_collections",
+            "get_collection_info",
+            "create_collection",
+            "move_to_collection",
+            "set_collection_color",
+            "delete_collection",
+            "get_selection",
+            "get_active",
+            "set_selection",
+            "set_active",
+            "select_by_type",
+            "assistant_help",
+            "capture_viewport_for_vision",
+        ]
 
 
 def llama_chat(
@@ -849,14 +897,12 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 state["state"] = "EXECUTE_QUEUED"
                 return
 
-
             # Start next iteration (inject a brief scene snapshot to keep context fresh)
 
             self._maybe_append_scene_snapshot(context)
             self._start_http_request(context)
 
             return
-
 
         # Fall back to text-based processing
         if not reply:
@@ -1096,14 +1142,12 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 state["state"] = "EXECUTE_QUEUED"
                 return
 
-
             # Start next iteration (inject a brief scene snapshot to keep context fresh)
 
             self._maybe_append_scene_snapshot(context)
             self._start_http_request(context)
 
         else:
-
             # No tool call - conversational response
             self._add_message("Assistant", reply)
             state["state"] = "DONE"
@@ -1264,10 +1308,6 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 else:
                     # Skip non-result tool logs (e.g., dedupe notices) from API payload
                     pass
-
-
-
-
 
         print(f"[DEBUG] Starting HTTP request with {len(messages)} messages")
 
@@ -1983,13 +2023,8 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
             auto = getattr(prefs, "auto_scene_snapshot", True) if prefs else True
 
-
-
             if not auto:
-
                 return
-
-
 
             # Persist and reuse fold_state across turns
 
@@ -1997,8 +2032,6 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             # Focus recently touched names
 
             wf = state.get("working_focus") or {"objects": [], "collections": []}
-
-
 
             focus = list((wf.get("collections") or []) + (wf.get("objects") or []))[-8:]
 
