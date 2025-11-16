@@ -19,7 +19,7 @@
 # Release archives (publish via GitHub Releases instead)
 # Restrict to repo root so you can keep zips elsewhere if needed
 /*.zip
-/scripts/release stats.py
+/scripts/release_stats.py
 
 # ----------------------------------------
 # Python build artifacts
