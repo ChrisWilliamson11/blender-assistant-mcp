@@ -2,20 +2,22 @@
 
 ## Overview
 
-The Blender Assistant now uses a **preference-based tools configuration system** instead of hardcoded tool lists. This provides flexibility to customize which tools are exposed to the LLM via the OpenAI-style tools schema, enabling you to optimize context usage and control the assistant's capabilities.
+The Blender Assistant uses a **checkbox-based tools configuration system** in preferences to control which tools are exposed to the LLM via the OpenAI-style tools schema. This provides an intuitive way to customize the assistant's capabilities and optimize context usage.
 
-## What Changed
+## What Changed (Version 2.2.0+)
 
 ### Previous System
 - Tools were hardcoded in `build_openai_tools()` function
-- A separate UI-based tool selector existed but wasn't integrated with schema-based tools
+- A separate UI-based tool selector panel existed in the 3D Viewport sidebar
+- Tool selector panel wasn't integrated with schema-based tools
 - No easy way to switch between tool sets
 
-### New System
-- Tools are configured via **Preferences → Tools Configuration (Advanced)**
-- Tool list is stored as JSON in preferences
+### New System (Current)
+- **Checkbox-based UI** directly in preferences
+- Tools grouped by category with visual enable/disable buttons
 - Three quick presets available: Lean (Default), Core Only, All Tools
-- `execute_code` is always included regardless of settings (safety guarantee)
+- `execute_code` is always enabled and locked (safety guarantee)
+- Old 3D Viewport tool selector panel removed (deprecated)
 
 ## Location
 
@@ -44,46 +46,119 @@ Three presets are available for common scenarios:
 
 3. **All Tools** - Maximum capabilities
    - Every registered tool in the MCP registry
-   - Includes PolyHaven, stock photos, web search, etc.
+   - Includes PolyHaven, stock photos, web search, Sketchfab, etc.
    - Higher context usage
    - ~30+ tools depending on what's registered
 
-### Manual Configuration
+**Usage**: Simply click one of the three preset buttons at the top of the Tools Configuration section.
 
-The `schema_tools` field accepts a JSON array of tool names:
+### Checkbox-Based UI
 
-```json
-[
-  "execute_code",
-  "get_scene_info",
-  "get_object_info",
-  "list_collections",
-  "assistant_help"
-]
-```
+#### Category Organization
 
-#### Adding Tools
-1. Check the "Available Tools in Registry" section to see all registered tools
-2. Copy the tool name exactly as shown
-3. Add it to the JSON array in the `Tools List (JSON)` field
-4. Tools are grouped by category (Blender, Selection, Collections, Web, PolyHaven, Stock Photos)
+Tools are organized by category in collapsible boxes:
 
-#### Removing Tools
-Simply remove the tool name from the JSON array. Note that `execute_code` will always be re-added automatically.
-
-## Tool Categories
-
-Tools in the registry are organized by category:
-
-- **Blender** - Core Blender operations (scene/object info, data access)
+- **Blender** - Core Blender operations
 - **Selection** - Object selection and activation
 - **Collections** - Collection management
-- **Vision** - Viewport capture for vision models
-- **Web** - Web search capabilities
-- **PolyHaven** - Asset search and download from PolyHaven
-- **Stock Photos** - Unsplash/Pexels integration
-- **Code Execution** - Python code execution (always enabled)
-- **Help** - Assistant SDK documentation access
+- **Vision** - Viewport capture
+- **Web** - Web search and image download
+- **PolyHaven** - Asset library integration
+- **Stock Photos** - Unsplash/Pexels
+- **Sketchfab** - 3D model downloads
+- **Code Execution** - Python execution
+- **RAG** - Documentation search
+
+#### Using Categories
+
+Each category box shows:
+- Category name
+- Enabled/total count: `Category Name (5/8)`
+- **✓ button** - Enable all tools in this category
+- **✗ button** - Disable all tools in this category
+
+#### Individual Tool Checkboxes
+
+- **Check/uncheck** any tool to enable/disable it
+- **execute_code** is locked (always enabled) for safety
+- Changes take effect immediately
+- No need to save or apply
+
+#### Refresh Tool List
+
+If new tools are registered (e.g., after installing additional modules), click the **"Refresh Tool List"** button to update the UI with the latest registry.
+
+### Status Display
+
+At the top of the tools section, you'll see:
+```
+Enabled: 16 / 30 tools
+```
+
+This shows how many tools are currently enabled out of the total available.
+
+## Tool Categories Explained
+
+### Blender (Core Operations)
+- `get_scene_info` - Outliner-style scene hierarchy
+- `get_object_info` - Detailed object information
+- `create_object` - Create primitives, cameras, lights, text
+- `modify_object` - Edit transforms and visibility
+- `delete_object` - Remove objects
+- `set_material` - Apply/create materials
+- `capture_viewport_for_vision` - Screenshot + VLM analysis
+- `assistant_help` - SDK documentation access
+
+### Collections
+- `list_collections` - List all collections
+- `get_collection_info` - Collection details
+- `create_collection` - Create new collections
+- `move_to_collection` - Move objects to collections
+- `set_collection_color` - Set color tags
+- `delete_collection` - Remove collections
+
+### Selection
+- `get_selection` - List selected objects
+- `get_active` - Get active object
+- `set_selection` - Select objects by name
+- `set_active` - Make object active
+- `select_by_type` - Select by type (MESH, LIGHT, etc.)
+
+### Web
+- `web_search` - DuckDuckGo web search
+- `search_wikimedia_image` - Find free images
+- `fetch_webpage` - Extract webpage content
+- `extract_image_urls` - Find images on any webpage
+- `download_image_as_texture` - Download and apply images
+
+### Stock Photos
+- `search_stock_photos` - Search Unsplash/Pexels
+- `download_stock_photo` - Download and apply stock photos
+
+### PolyHaven
+- `search_polyhaven_assets` - Search HDRIs, textures, models
+- `download_polyhaven` - Download and apply assets
+
+### Sketchfab
+- `sketchfab_login` - Authenticate with API token
+- `sketchfab_search` - Search 3D models
+- `sketchfab_download_model` - Download and import models
+
+### RAG (Documentation)
+- `rag_query` - Search Blender documentation
+- `rag_get_stats` - Database statistics
+
+### Code Execution
+- `execute_code` - Execute Python code (always enabled)
+
+## Benefits
+
+1. **Reduced Context Usage** - Fewer tools = smaller OpenAI payload
+2. **Visual Interface** - See all tools at a glance with checkboxes
+3. **Category Management** - Enable/disable entire categories quickly
+4. **Persistent Settings** - Saved with Blender preferences
+5. **Flexible** - Easy presets or granular control
+6. **Safe** - `execute_code` always included as safety net
 
 ## Technical Details
 
@@ -91,95 +166,180 @@ Tools in the registry are organized by category:
 
 The tools configuration system consists of:
 
-1. **Preference Property** (`preferences.py`)
+1. **Property Group** (`preferences.py`)
    ```python
-   schema_tools: bpy.props.StringProperty(
-       name="Schema Tools",
-       description="JSON list of tool names to expose via OpenAI-style tools schema",
-       default='[...]',  # Default lean toolset
-   )
+   class ToolConfigItem(bpy.types.PropertyGroup):
+       name: bpy.props.StringProperty(name="Tool Name")
+       enabled: bpy.props.BoolProperty(name="Enabled", default=True)
+       category: bpy.props.StringProperty(name="Category")
+       description: bpy.props.StringProperty(name="Description")
    ```
 
-2. **Helper Function** (`assistant.py`)
+2. **Collection Property** (on AssistantPreferences)
    ```python
-   def get_schema_tools() -> list:
-       """Get the list of schema-based tools from preferences."""
+   tool_config_items: bpy.props.CollectionProperty(type=ToolConfigItem)
    ```
 
-3. **Build Function** (`assistant.py`)
+3. **Sync Function** (`preferences.py`)
+   ```python
+   def _sync_tools_to_json(prefs):
+       """Sync checkboxes to internal schema_tools JSON."""
+       enabled = [t.name for t in prefs.tool_config_items if t.enabled]
+       prefs.schema_tools = json.dumps(enabled)
+   ```
+
+4. **Build Function** (`assistant.py`)
    ```python
    def build_openai_tools() -> list:
-       """Build OpenAI-style tools list from MCP registry using schema-based tools."""
+       """Build OpenAI-style tools from checkbox configuration."""
+       # Reads from tool_config_items checkboxes
    ```
 
-4. **UI Panel** (`preferences.py`)
+5. **UI Drawing** (`preferences.py`)
    ```python
    def _draw_tools_settings(self, layout):
-       """Draw tools configuration section."""
+       """Draw checkbox-based tools configuration."""
    ```
 
-5. **Preset Operator** (`preferences.py`)
-   ```python
-   class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
-       """Set a predefined tool configuration."""
-   ```
+6. **Operators**
+   - `ASSISTANT_OT_refresh_tool_config` - Refresh from registry
+   - `ASSISTANT_OT_toggle_category_tools_prefs` - Category enable/disable
+   - `ASSISTANT_OT_set_tool_preset` - Apply presets
+
+### Data Storage
+
+- **Primary**: `tool_config_items` collection (checkboxes)
+- **Secondary**: `schema_tools` string property (JSON, for backward compatibility)
+- Changes to checkboxes are synced to JSON automatically
+- `build_openai_tools()` reads from checkboxes, falls back to JSON
+
+### Initialization
+
+Tools are auto-populated on addon startup:
+1. Timer waits 1 second for tool registration
+2. Reads from MCP `_TOOLS` registry
+3. Populates `tool_config_items` with all registered tools
+4. Sets initial enabled state from default `schema_tools` JSON
+5. Always ensures `execute_code` is enabled
 
 ### Integration Points
 
-- **MCP Tools Registry** (`mcp_tools.py`) - All tools are registered here with categories
-- **Tool Execution** - Only tools in the schema list are exposed to the LLM, but all can be called directly
-- **Context Optimization** - Fewer tools = smaller OpenAI tools payload = more room for conversation
+- **MCP Tools Registry** (`mcp_tools.py`) - All tools registered here
+- **Tool Execution** - Only enabled tools exposed via OpenAI schema
+- **Context Optimization** - Fewer tools = smaller payload = more conversation room
 
-### Migration from Old Tool Selector
+## Migration Notes
 
-The old `tool_selector.py` UI panel in the 3D Viewport sidebar is still present but **no longer affects schema-based tools**. The new preference-based system takes precedence for tools exposed to the LLM via the OpenAI schema.
+### From Old Tool Selector Panel
 
-If you were using the old tool selector, your enabled tools may differ from the new default. Review the new preferences to ensure your desired tools are enabled.
+The old tool selector panel in the 3D Viewport sidebar has been **removed**. Its functionality has been fully integrated into the new preference-based system.
 
-## Benefits
+**What to do:**
+1. Open Preferences → Add-ons → Blender Assistant → Tools Configuration
+2. Review your enabled tools (defaults to Lean preset)
+3. Adjust as needed using checkboxes or presets
+4. Changes persist across sessions
 
-1. **Reduced Context Usage** - Lean toolset reduces OpenAI tools payload size
-2. **Centralized Configuration** - All settings in one place (preferences)
-3. **Persistent** - Settings saved with Blender preferences
-4. **Flexible** - Easy to switch between presets or customize
-5. **Safe** - `execute_code` always included as safety net
+### Backward Compatibility
+
+- The internal `schema_tools` JSON property still exists for compatibility
+- Old configurations will be imported on first launch
+- Checkboxes become the primary interface
 
 ## Recommendations
 
-- **General Use**: Start with "Lean (Default)" preset
-- **Simple Tasks**: Use "Core Only" to maximize conversation context
-- **Complex Workflows**: Use "All Tools" when you need web search, assets, etc.
-- **Custom Scenarios**: Manually configure based on your specific needs
+### General Use
+Start with **"Lean (Default)"** preset - provides good balance of capabilities and context efficiency.
 
-## Future Enhancements
+### Simple Tasks
+Use **"Core Only"** preset when:
+- Working on simple modeling tasks
+- Token budget is tight
+- You want maximum conversation context
 
-Potential future improvements:
+### Complex Workflows
+Use **"All Tools"** preset when:
+- Downloading assets from PolyHaven
+- Searching for reference images
+- Using web search for documentation
+- Working with Sketchfab models
 
-- Per-session tool sets (override preferences temporarily)
-- Tool usage statistics (which tools are actually being used)
-- Smart tool recommendations based on conversation context
-- Tool groups/profiles for different workflows
-- UI for visual tool selection (drag-and-drop)
+### Custom Scenarios
+Manually configure tools when:
+- You know exactly which operations you'll need
+- You want to exclude specific categories
+- You're testing tool functionality
+
+## Best Practices
+
+1. **Start Small** - Begin with Lean or Core presets, add more as needed
+2. **Review Enabled Tools** - Periodically check what's enabled
+3. **Category Toggles** - Use category enable/disable for quick adjustments
+4. **Execute Code Always On** - Don't worry about it being locked - it's essential
+5. **Refresh After Updates** - If you add new tool modules, click Refresh
 
 ## Troubleshooting
 
-**Q: My tools aren't showing up in the assistant**
-- Check that the tool name is spelled exactly as shown in "Available Tools in Registry"
-- Verify the JSON is valid (use a JSON validator if needed)
-- `execute_code` is always available even if not listed
+**Q: I don't see any tools in the preferences**
+- Click "Refresh Tool List" button
+- Wait a moment for tools to register on startup
+- Check console for errors
+
+**Q: Changes don't seem to take effect**
+- Changes are immediate - restart not needed
+- Check "Enabled: X / Y tools" counter updates
+- Verify checkbox state matches expectation
+
+**Q: execute_code checkbox is disabled/grayed out**
+- This is intentional - it's always enabled for safety
+- Cannot be disabled to ensure core functionality
 
 **Q: I want to go back to defaults**
 - Click the "Lean (Default)" preset button
+- This restores the recommended tool set
 
 **Q: Can I disable all tools?**
-- No, `execute_code` is always enabled for safety and core functionality
+- No, `execute_code` is always enabled
+- This ensures the assistant can always write and execute Python code
 
-**Q: The old Tool Selector panel is still there**
-- The old UI is deprecated but not yet removed
-- It no longer affects schema-based tools
-- Use the new preference-based system instead
+**Q: Where did the old Tool Selection panel go?**
+- It was removed in version 2.2.0+
+- All functionality is now in Preferences → Tools Configuration
+- The new system is more powerful and better integrated
+
+## Performance Notes
+
+### Context Impact
+
+Tool count directly affects the OpenAI tools payload size:
+
+- **Core Only (4 tools)**: ~2-3 KB payload
+- **Lean (16 tools)**: ~8-10 KB payload  
+- **All Tools (30+ tools)**: ~15-20 KB payload
+
+**Impact**: More tools = less room for conversation history in context window.
+
+### Recommendations by Context Size
+
+- **128K+ context**: Use All Tools without concern
+- **32K-128K context**: Use Lean or custom selection
+- **8K-32K context**: Consider Core Only for long conversations
+- **<8K context**: Definitely use Core Only
+
+## Future Enhancements
+
+Potential improvements being considered:
+
+- Per-session tool overrides (temporary enable/disable)
+- Tool usage analytics (which tools are actually being called)
+- Smart recommendations based on conversation context
+- Tool dependency tracking (automatically enable required tools)
+- Export/import tool configurations
+- Named custom presets
+- Search/filter tools by name
 
 ---
 
-**Last Updated**: 2025
-**Version**: 2.2.0+
+**Last Updated**: January 2025  
+**Version**: 2.2.0+  
+**Status**: Stable

@@ -703,6 +703,18 @@ class ASSISTANT_OT_rebuild_rag_db(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+# Property group for individual tool (checkbox-based UI)
+class ToolConfigItem(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty(name="Tool Name")
+    enabled: bpy.props.BoolProperty(
+        name="Enabled",
+        default=True,
+        description="Enable this tool in the OpenAI schema",
+    )
+    category: bpy.props.StringProperty(name="Category")
+    description: bpy.props.StringProperty(name="Description")
+
+
 def _on_models_folder_update(self, context):
     import os
 
@@ -1583,9 +1595,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         # Automatic scene snapshot to keep context fresh
         settings_col.prop(self, "auto_scene_snapshot")
         if self.auto_scene_snapshot:
-            row = settings_col.row(align=True)
-            row.prop(self, "snapshot_info_level")
-            row.prop(self, "snapshot_max_objects")
+            settings_col.prop(self, "snapshot_max_objects")
 
         # Planning exploration controls
         settings_col.prop(self, "planning_exploration")
@@ -1672,7 +1682,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         api_col.label(text="  • Pexels: pexels.com/api")
 
     def _draw_tools_settings(self, layout):
-        """Draw tools configuration section."""
+        """Draw tools configuration section with checkboxes."""
         from . import mcp_tools
 
         tools_box = layout.box()
@@ -1680,28 +1690,9 @@ class AssistantPreferences(bpy.types.AddonPreferences):
 
         tools_col = tools_box.column(align=True)
         tools_col.label(
-            text="Configure which tools are exposed to the LLM via OpenAI schema:",
+            text="Select which tools to expose to the LLM via OpenAI schema:",
             icon="INFO",
         )
-        tools_col.separator()
-
-        # Parse current tools list
-        import json
-
-        try:
-            current_tools = json.loads(self.schema_tools)
-            tools_count = len(current_tools) if isinstance(current_tools, list) else 0
-        except Exception:
-            current_tools = []
-            tools_count = 0
-
-        # Show current tool count
-        row = tools_col.row(align=True)
-        row.label(text=f"Current: {tools_count} tools enabled", icon="CHECKBOX_HLT")
-
-        # JSON editor for schema_tools
-        tools_col.separator()
-        tools_col.prop(self, "schema_tools", text="Tools List (JSON)")
 
         # Quick preset buttons
         tools_col.separator()
@@ -1717,42 +1708,94 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         op = preset_row.operator("assistant.set_tool_preset", text="All Tools")
         op.preset = "all"
 
-        # Show available tools from registry
+        # Refresh button
         tools_col.separator()
-        tools_col.label(text="Available Tools in Registry:", icon="DOCUMENTS")
+        tools_col.operator(
+            "assistant.refresh_tool_config",
+            text="Refresh Tool List",
+            icon="FILE_REFRESH",
+        )
 
-        try:
-            all_tools = mcp_tools.get_tools_list()
-            tools_by_category = {}
-            for tool in all_tools:
-                name = tool.get("name", "")
-                category = tool.get("category", "Other")
-                if category not in tools_by_category:
-                    tools_by_category[category] = []
-                tools_by_category[category].append(name)
+        # Show tools grouped by category with checkboxes
+        tools_col.separator()
 
-            # Display by category
-            info_col = tools_col.column(align=True)
-            for category in sorted(tools_by_category.keys()):
-                tool_names = sorted(tools_by_category[category])
-                enabled_in_category = [t for t in tool_names if t in current_tools]
-                info_col.label(
-                    text=f"  {category}: {len(enabled_in_category)}/{len(tool_names)} enabled"
-                )
+        if not hasattr(self, "tool_config_items") or len(self.tool_config_items) == 0:
+            tools_col.label(
+                text="No tools found. Click 'Refresh Tool List'.", icon="INFO"
+            )
+            return
 
-        except Exception as e:
-            tools_col.label(text=f"Could not load tools: {e}", icon="ERROR")
+        # Count enabled tools
+        enabled_count = sum(1 for t in self.tool_config_items if t.enabled)
+        tools_col.label(
+            text=f"Enabled: {enabled_count} / {len(self.tool_config_items)} tools",
+            icon="CHECKBOX_HLT",
+        )
+
+        tools_col.separator()
+
+        # Get tools grouped by category
+        tools_by_category = {}
+        for tool in self.tool_config_items:
+            cat = tool.category or "Other"
+            if cat not in tools_by_category:
+                tools_by_category[cat] = []
+            tools_by_category[cat].append(tool)
+
+        # Draw category sections
+        for category in sorted(tools_by_category.keys()):
+            tools = tools_by_category[category]
+
+            # Category header
+            box = tools_col.box()
+            row = box.row()
+
+            enabled_in_cat = sum(1 for t in tools if t.enabled)
+            row.label(
+                text=f"{category} ({enabled_in_cat}/{len(tools)})", icon="TOOL_SETTINGS"
+            )
+
+            # Category enable/disable buttons
+            op = row.operator(
+                "assistant.toggle_category_tools_prefs",
+                text="",
+                icon="CHECKBOX_HLT",
+                emboss=False,
+            )
+            op.category = category
+            op.enable = True
+
+            op = row.operator(
+                "assistant.toggle_category_tools_prefs",
+                text="",
+                icon="CHECKBOX_DEHLT",
+                emboss=False,
+            )
+            op.category = category
+            op.enable = False
+
+            # Tool list with checkboxes
+            for tool in sorted(tools, key=lambda t: t.name):
+                row = box.row()
+                row.prop(tool, "enabled", text=tool.name)
+                # Show execute_code as always enabled
+                if tool.name == "execute_code":
+                    row.enabled = False
+                    row.label(text="(always enabled)", icon="LOCKED")
 
         tools_col.separator()
         tools_col.label(
-            text="Note: execute_code is always included regardless of this setting.",
+            text="Note: execute_code is always included as a safety guarantee.",
             icon="KEYFRAME_HLT",
         )
 
-    # Schema-based tools configuration (replaces UI tool selector)
+    # Schema-based tools configuration (checkbox-based UI)
+    tool_config_items: bpy.props.CollectionProperty(type=ToolConfigItem)
+
+    # Hidden property for backward compatibility / serialization
     schema_tools: bpy.props.StringProperty(
-        name="Schema Tools",
-        description="JSON list of tool names to expose via OpenAI-style tools schema",
+        name="Schema Tools (Internal)",
+        description="Internal JSON list of tool names (synced with checkboxes)",
         default='["execute_code", "get_scene_info", "get_object_info", "list_collections", "get_collection_info", "create_collection", "move_to_collection", "set_collection_color", "delete_collection", "get_selection", "get_active", "set_selection", "set_active", "select_by_type", "assistant_help", "capture_viewport_for_vision"]',
     )
 
@@ -1869,6 +1912,69 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             self._draw_tools_settings(layout)
 
 
+# Operator to refresh tool configuration from registry
+class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
+    bl_idname = "assistant.refresh_tool_config"
+    bl_label = "Refresh Tool Configuration"
+    bl_description = "Refresh the tool list from MCP registry"
+
+    def execute(self, context):
+        import json
+
+        from . import mcp_tools
+
+        prefs = context.preferences.addons[__package__].preferences
+
+        # Get current enabled tools to preserve state
+        try:
+            current_enabled = json.loads(prefs.schema_tools)
+        except Exception:
+            current_enabled = []
+
+        # Clear and rebuild
+        prefs.tool_config_items.clear()
+
+        # Add all registered tools
+        for name, tool_data in mcp_tools._TOOLS.items():
+            item = prefs.tool_config_items.add()
+            item.name = name
+            item.category = tool_data.get("category", "Other")
+            item.description = tool_data.get("description", "")
+            item.enabled = name in current_enabled or name == "execute_code"
+
+        # Sync to schema_tools
+        _sync_tools_to_json(prefs)
+
+        self.report({"INFO"}, f"Refreshed {len(prefs.tool_config_items)} tools")
+        return {"FINISHED"}
+
+
+# Operator to toggle all tools in a category
+class ASSISTANT_OT_toggle_category_tools_prefs(bpy.types.Operator):
+    bl_idname = "assistant.toggle_category_tools_prefs"
+    bl_label = "Toggle Category Tools"
+    bl_description = "Enable or disable all tools in this category"
+
+    category: bpy.props.StringProperty()
+    enable: bpy.props.BoolProperty()
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__].preferences
+
+        for tool in prefs.tool_config_items:
+            if tool.category == self.category:
+                # Always keep execute_code enabled
+                if tool.name == "execute_code":
+                    tool.enabled = True
+                else:
+                    tool.enabled = self.enable
+
+        # Sync to schema_tools
+        _sync_tools_to_json(prefs)
+
+        return {"FINISHED"}
+
+
 # Operator to set tool presets
 class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
     bl_idname = "assistant.set_tool_preset"
@@ -1878,8 +1984,6 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
     preset: bpy.props.StringProperty()
 
     def execute(self, context):
-        import json
-
         from . import mcp_tools
 
         prefs = context.preferences.addons[__package__].preferences
@@ -1920,13 +2024,33 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
             self.report({"ERROR"}, f"Unknown preset: {self.preset}")
             return {"CANCELLED"}
 
-        prefs.schema_tools = json.dumps(tools)
+        # Update checkboxes
+        tools_set = set(tools)
+        for tool in prefs.tool_config_items:
+            tool.enabled = tool.name in tools_set or tool.name == "execute_code"
+
+        # Sync to schema_tools
+        _sync_tools_to_json(prefs)
+
         self.report({"INFO"}, f"Set {len(tools)} tools from preset '{self.preset}'")
         return {"FINISHED"}
 
 
+def _sync_tools_to_json(prefs):
+    """Sync tool_config_items checkboxes to schema_tools JSON."""
+    import json
+
+    enabled = [t.name for t in prefs.tool_config_items if t.enabled]
+    # Always ensure execute_code is included
+    if "execute_code" not in enabled:
+        enabled.append("execute_code")
+    prefs.schema_tools = json.dumps(enabled)
+
+
 def register():
     """Register preferences and operators, auto-scan for Ollama models."""
+    bpy.utils.register_class(ToolConfigItem)
+
     bpy.utils.register_class(ASSISTANT_OT_refresh_models)
     bpy.utils.register_class(ASSISTANT_OT_pull_model)
     bpy.utils.register_class(ASSISTANT_OT_delete_model)
@@ -1937,9 +2061,46 @@ def register():
     bpy.utils.register_class(ASSISTANT_OT_search_ollama_library)
 
     bpy.utils.register_class(ASSISTANT_OT_toggle_model_capability)
+    bpy.utils.register_class(ASSISTANT_OT_refresh_tool_config)
+    bpy.utils.register_class(ASSISTANT_OT_toggle_category_tools_prefs)
     bpy.utils.register_class(ASSISTANT_OT_set_tool_preset)
 
     bpy.utils.register_class(AssistantPreferences)
+
+    # Initialize tool config after a delay (tools need to be registered first)
+    def delayed_tool_init():
+        try:
+            if bpy.context:
+                import json
+
+                from . import mcp_tools
+
+                prefs = bpy.context.preferences.addons[__package__].preferences
+
+                # Only initialize if empty
+                if len(prefs.tool_config_items) == 0:
+                    # Get default enabled tools
+                    try:
+                        default_enabled = json.loads(prefs.schema_tools)
+                    except Exception:
+                        default_enabled = []
+
+                    # Populate from registry
+                    for name, tool_data in mcp_tools._TOOLS.items():
+                        item = prefs.tool_config_items.add()
+                        item.name = name
+                        item.category = tool_data.get("category", "Other")
+                        item.description = tool_data.get("description", "")
+                        item.enabled = name in default_enabled or name == "execute_code"
+
+                    print(
+                        f"[Tool Config] Initialized {len(prefs.tool_config_items)} tools"
+                    )
+        except Exception as e:
+            print(f"[Tool Config] Delayed init failed: {e}")
+        return None
+
+    bpy.app.timers.register(delayed_tool_init, first_interval=1.0)
 
     # Auto-scan for Ollama models on startup (non-blocking)
     global _ollama_models_enum_items, _ollama_models_cache
@@ -1976,6 +2137,8 @@ def unregister():
     """Unregister preferences and operators."""
     bpy.utils.unregister_class(AssistantPreferences)
     bpy.utils.unregister_class(ASSISTANT_OT_set_tool_preset)
+    bpy.utils.unregister_class(ASSISTANT_OT_toggle_category_tools_prefs)
+    bpy.utils.unregister_class(ASSISTANT_OT_refresh_tool_config)
     bpy.utils.unregister_class(ASSISTANT_OT_toggle_model_capability)
     bpy.utils.unregister_class(ASSISTANT_OT_search_ollama_library)
     bpy.utils.unregister_class(ASSISTANT_OT_open_ollama_folder)
@@ -1984,3 +2147,5 @@ def unregister():
     bpy.utils.unregister_class(ASSISTANT_OT_delete_model)
     bpy.utils.unregister_class(ASSISTANT_OT_pull_model)
     bpy.utils.unregister_class(ASSISTANT_OT_refresh_models)
+
+    bpy.utils.unregister_class(ToolConfigItem)

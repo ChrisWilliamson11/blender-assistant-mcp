@@ -28,7 +28,6 @@ from . import (
     preferences,
     selection_tools,
     stock_photo_tools,
-    tool_selector,
     ui,
 )
 
@@ -38,7 +37,6 @@ _modules = [
     selection_tools,
     polyhaven_tools,
     stock_photo_tools,
-    tool_selector,  # Register tool selector UI
     assistant,
     ui,
     preferences,

@@ -133,20 +133,39 @@ def build_system_prompt() -> str:
 
 
 def build_openai_tools() -> list:
-    """Build OpenAI-style tools list from MCP registry using schema-based tools from preferences."""
-    import json
-
+    """Build OpenAI-style tools list from MCP registry using checkbox-based tool configuration from preferences."""
     import bpy
 
-    # Get tools list from preferences
+    # Get tools list from preferences (checkbox-based UI)
     try:
         prefs = bpy.context.preferences.addons[__package__].preferences
-        schema_tools_json = getattr(prefs, "schema_tools", "[]")
-        schema_tools = json.loads(schema_tools_json)
-        if not isinstance(schema_tools, list):
-            schema_tools = []
+        tool_config_items = getattr(prefs, "tool_config_items", None)
+
+        if tool_config_items and len(tool_config_items) > 0:
+            # Read from checkboxes
+            schema_tools = [t.name for t in tool_config_items if t.enabled]
+        else:
+            # Fallback to default lean toolset if checkboxes not initialized
+            schema_tools = [
+                "execute_code",
+                "get_scene_info",
+                "get_object_info",
+                "list_collections",
+                "get_collection_info",
+                "create_collection",
+                "move_to_collection",
+                "set_collection_color",
+                "delete_collection",
+                "get_selection",
+                "get_active",
+                "set_selection",
+                "set_active",
+                "select_by_type",
+                "assistant_help",
+                "capture_viewport_for_vision",
+            ]
     except Exception as e:
-        print(f"[DEBUG] Failed to load schema_tools from preferences: {e}")
+        print(f"[DEBUG] Failed to load tool config from preferences: {e}")
         # Fallback to default lean toolset
         schema_tools = [
             "execute_code",
@@ -167,7 +186,7 @@ def build_openai_tools() -> list:
             "capture_viewport_for_vision",
         ]
 
-    # Build allowed set from schema_tools
+    # Build allowed set from enabled tools
     allowed_set = set(schema_tools)
     # Ensure execute_code is always included
     allowed_set.add("execute_code")
@@ -199,19 +218,38 @@ def get_schema_tools() -> list:
     """Get the list of schema-based tools from preferences.
 
     Returns:
-        List of tool names enabled in preferences schema_tools setting.
+        List of tool names enabled in preferences checkbox UI.
         Falls back to default lean toolset if preferences can't be loaded.
     """
-    import json
-
     import bpy
 
     try:
         prefs = bpy.context.preferences.addons[__package__].preferences
-        schema_tools_json = getattr(prefs, "schema_tools", "[]")
-        schema_tools = json.loads(schema_tools_json)
-        if not isinstance(schema_tools, list):
-            schema_tools = []
+        tool_config_items = getattr(prefs, "tool_config_items", None)
+
+        if tool_config_items and len(tool_config_items) > 0:
+            # Read from checkboxes
+            schema_tools = [t.name for t in tool_config_items if t.enabled]
+        else:
+            # Fallback to default lean toolset if checkboxes not initialized
+            schema_tools = [
+                "execute_code",
+                "get_scene_info",
+                "get_object_info",
+                "list_collections",
+                "get_collection_info",
+                "create_collection",
+                "move_to_collection",
+                "set_collection_color",
+                "delete_collection",
+                "get_selection",
+                "get_active",
+                "set_selection",
+                "set_active",
+                "select_by_type",
+                "assistant_help",
+                "capture_viewport_for_vision",
+            ]
 
         # Ensure execute_code is always included
         if "execute_code" not in schema_tools:
@@ -219,7 +257,7 @@ def get_schema_tools() -> list:
 
         return schema_tools
     except Exception as e:
-        print(f"[DEBUG] Failed to load schema_tools from preferences: {e}")
+        print(f"[DEBUG] Failed to load tool config from preferences: {e}")
         # Fallback to default lean toolset
         return [
             "execute_code",
