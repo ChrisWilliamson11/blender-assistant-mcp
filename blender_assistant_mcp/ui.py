@@ -5,6 +5,9 @@ import bpy
 # Global set to track which code blocks are expanded (message_idx, block_idx)
 _expanded_code_blocks = set()
 
+# Global set to track which JSON hierarchy nodes are expanded (message_idx, path)
+_expanded_json_nodes = set()
+
 
 class ASSISTANT_PT_panel(bpy.types.Panel):
     """Main automation Assistant panel in the 3D View sidebar"""
@@ -306,7 +309,9 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
                     try:
                         # Try to parse as JSON and display hierarchically
                         data = json.loads(content)
-                        self._draw_json_hierarchy(box, data, depth=0)
+                        self._draw_json_hierarchy(
+                            box, data, wm.assistant_chat_message_index, depth=0, path=""
+                        )
                         # Skip normal text display for tool messages with valid JSON
                         lines = []
                     except (json.JSONDecodeError, Exception):
@@ -416,60 +421,115 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
         else:
             col.label(text="No active chat session")
 
-    def _draw_json_hierarchy(self, parent_box, data, depth=0, max_depth=5):
-        """Draw JSON data as nested boxes instead of raw text.
+    def _draw_json_hierarchy(
+        self, parent_box, data, message_idx, depth=0, path="", max_depth=5
+    ):
+        """Draw JSON data as nested boxes with collapsible sections.
 
         Args:
             parent_box: Parent UI box to draw into
             data: JSON data (dict, list, or primitive)
+            message_idx: Index of the message (for tracking expand state)
             depth: Current nesting depth
+            path: Current path in the hierarchy (for tracking expand state)
             max_depth: Maximum depth to expand
         """
         if depth > max_depth:
             parent_box.label(text="... (too deeply nested)", icon="INFO")
             return
 
+        wm = bpy.context.window_manager
+
         if isinstance(data, dict):
             for key, value in data.items():
+                current_path = f"{path}.{key}" if path else key
                 if isinstance(value, (dict, list)) and value:
-                    # Nested structure - create a sub-box
+                    # Nested structure - collapsible
+                    node_key = (message_idx, current_path)
+                    is_expanded = node_key in _expanded_json_nodes or depth == 0
+
                     sub_box = parent_box.box()
-                    row = sub_box.row()
+                    row = sub_box.row(align=True)
+
+                    # Toggle button
+                    icon = "TRIA_DOWN" if is_expanded else "TRIA_RIGHT"
+                    toggle_op = row.operator(
+                        "assistant.toggle_json_node",
+                        text="",
+                        icon=icon,
+                        emboss=False,
+                    )
+                    toggle_op.message_index = message_idx
+                    toggle_op.node_path = current_path
+
                     row.label(text=f"{key}:", icon="DISCLOSURE_TRI_DOWN")
-                    self._draw_json_hierarchy(sub_box, value, depth + 1, max_depth)
+
+                    # Show content if expanded
+                    if is_expanded:
+                        self._draw_json_hierarchy(
+                            sub_box,
+                            value,
+                            message_idx,
+                            depth + 1,
+                            current_path,
+                            max_depth,
+                        )
                 else:
-                    # Simple value - display inline
-                    value_box = parent_box.box()
-                    row = value_box.row()
+                    # Simple value - no box, just plain text
                     if isinstance(value, bool):
-                        row.label(
+                        parent_box.label(
                             text=f"{key}: {str(value).lower()}",
                             icon="CHECKMARK" if value else "PANEL_CLOSE",
                         )
                     elif value is None:
-                        row.label(text=f"{key}: null", icon="X")
+                        parent_box.label(text=f"{key}: null", icon="X")
                     else:
-                        row.label(text=f"{key}: {value}")
+                        parent_box.label(text=f"{key}: {value}")
 
         elif isinstance(data, list):
             if not data:
                 parent_box.label(text="(empty list)")
             elif all(isinstance(item, (str, int, float, bool)) for item in data):
-                # Simple list - display items inline
+                # Simple list - display items as plain text
                 for item in data[:10]:  # Limit to 10 items
-                    item_box = parent_box.box()
-                    item_box.label(text=f"• {item}")
+                    parent_box.label(text=f"• {item}")
                 if len(data) > 10:
                     parent_box.label(
                         text=f"... and {len(data) - 10} more items", icon="INFO"
                     )
             else:
-                # Complex list - create boxes for each item
+                # Complex list - collapsible items
                 for idx, item in enumerate(data[:10]):
+                    current_path = f"{path}[{idx}]"
+                    node_key = (message_idx, current_path)
+                    is_expanded = node_key in _expanded_json_nodes or depth == 0
+
                     item_box = parent_box.box()
-                    row = item_box.row()
+                    row = item_box.row(align=True)
+
+                    # Toggle button
+                    icon = "TRIA_DOWN" if is_expanded else "TRIA_RIGHT"
+                    toggle_op = row.operator(
+                        "assistant.toggle_json_node",
+                        text="",
+                        icon=icon,
+                        emboss=False,
+                    )
+                    toggle_op.message_index = message_idx
+                    toggle_op.node_path = current_path
+
                     row.label(text=f"[{idx}]", icon="DISCLOSURE_TRI_DOWN")
-                    self._draw_json_hierarchy(item_box, item, depth + 1, max_depth)
+
+                    # Show content if expanded
+                    if is_expanded:
+                        self._draw_json_hierarchy(
+                            item_box,
+                            item,
+                            message_idx,
+                            depth + 1,
+                            current_path,
+                            max_depth,
+                        )
                 if len(data) > 10:
                     parent_box.label(
                         text=f"... and {len(data) - 10} more items", icon="INFO"
@@ -534,6 +594,31 @@ class ASSISTANT_OT_toggle_code_block(bpy.types.Operator):
             _expanded_code_blocks.remove(block_key)
         else:
             _expanded_code_blocks.add(block_key)
+
+        # Trigger UI redraw
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+        return {"FINISHED"}
+
+
+class ASSISTANT_OT_toggle_json_node(bpy.types.Operator):
+    """Toggle JSON hierarchy node expansion"""
+
+    bl_idname = "assistant.toggle_json_node"
+    bl_label = "Toggle JSON Node"
+    bl_options = {"REGISTER"}
+
+    message_index: bpy.props.IntProperty()
+    node_path: bpy.props.StringProperty()
+
+    def execute(self, context):
+        global _expanded_json_nodes
+        node_key = (self.message_index, self.node_path)
+        if node_key in _expanded_json_nodes:
+            _expanded_json_nodes.remove(node_key)
+        else:
+            _expanded_json_nodes.add(node_key)
 
         # Trigger UI redraw
         for area in context.screen.areas:
@@ -1177,6 +1262,7 @@ def register():
     # Register classes
     bpy.utils.register_class(ASSISTANT_UL_chat)
     bpy.utils.register_class(ASSISTANT_OT_toggle_code_block)
+    bpy.utils.register_class(ASSISTANT_OT_toggle_json_node)
     bpy.utils.register_class(ASSISTANT_OT_copy_code_block)
     bpy.utils.register_class(ASSISTANT_OT_paste_text)
     bpy.utils.register_class(ASSISTANT_OT_copy_message)
@@ -1214,6 +1300,7 @@ def unregister():
     bpy.utils.unregister_class(ASSISTANT_OT_copy_message)
     bpy.utils.unregister_class(ASSISTANT_OT_paste_text)
     bpy.utils.unregister_class(ASSISTANT_OT_copy_code_block)
+    bpy.utils.unregister_class(ASSISTANT_OT_toggle_json_node)
     bpy.utils.unregister_class(ASSISTANT_OT_toggle_code_block)
     bpy.utils.unregister_class(ASSISTANT_UL_chat)
 

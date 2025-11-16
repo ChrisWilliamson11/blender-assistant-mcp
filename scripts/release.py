@@ -244,15 +244,16 @@ def set_or_update_bl_info_version(init_text: str, new_version: str) -> str:
     major, minor, patch, _ = parse_semver(new_version)
 
     # Try to locate bl_info = { ... }
-    bl_info_start = re.search(r"(?m)^\s*bl_info\s*=\s*\{\s*$", init_text)
+    bl_info_start = re.search(r"(?m)^\s*bl_info\s*=\s*\{", init_text)
     if not bl_info_start:
         # If no bl_info block, we won't invent one; rely on __version__
         return init_text
 
     # Find the end of the dict by scanning braces
-    start_idx = bl_info_start.start()
+    # Use the end of the match to ensure we're on the line with the opening brace
+    match_end_idx = bl_info_start.end()
     # Find the line index of the starting brace
-    start_line = init_text[:start_idx].count("\n")
+    start_line = init_text[:match_end_idx].count("\n")
     lines = init_text.splitlines()
     # Scan lines to find closing brace for this dict
     brace_depth = 0
@@ -271,9 +272,9 @@ def set_or_update_bl_info_version(init_text: str, new_version: str) -> str:
     indent = re.match(r"^(\s*)", opening_line).group(1) + "    "
 
     # Search for existing "version": (...) within bl_info block
-    version_re = re.compile(r'(?m)^\s*["\']version["\']\s*:\s*\([^)]+\)\s*,?\s*$')
+    version_re = re.compile(r'^\s*["\']version["\']\s*:\s*\([^)]+\)')
     found_line = None
-    for i in range(start_line + 1, end_line + 1):
+    for i in range(start_line + 1, end_line):
         if version_re.search(lines[i]):
             found_line = i
             break
@@ -300,7 +301,7 @@ def update_init_py_version(path: Path, new_version: str, dry_run: bool) -> None:
     text = original_text
 
     # Normalize: remove any stray top-level "version": (X, Y, Z), lines appearing before bl_info
-    bl_info_match = re.search(r"(?m)^\s*bl_info\s*=\s*\{\s*$", text)
+    bl_info_match = re.search(r"(?m)^\s*bl_info\s*=\s*\{", text)
     if bl_info_match:
         prefix = text[: bl_info_match.start()]
         suffix = text[bl_info_match.start() :]
