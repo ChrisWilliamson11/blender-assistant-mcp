@@ -3038,15 +3038,35 @@ def register_tools():
     mcp_tools.register_tool(
         "capture_viewport_for_vision",
         capture_viewport_for_vision,
-        "Capture viewport screenshot for vision analysis (base64).",
+        "Capture the current viewport and (optionally) run a vision model to answer a specific question about the image. Returns the model's description/answer.",
         {
             "type": "object",
             "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "What to analyze in the captured viewport image (e.g., 'Are there 9 cubes? Label them.'). If empty, no VLM is run (capture-only).",
+                },
                 "max_size": {
                     "type": "integer",
-                    "description": "Max width/height in pixels",
+                    "description": "Max width/height in pixels for the captured image",
                     "default": 1024,
-                }
+                },
+                "return_image": {
+                    "type": "boolean",
+                    "description": "Include base64 image in the result (useful only with multimodal LLMs)",
+                    "default": false,
+                },
+                "vision_model": {
+                    "type": "string",
+                    "description": "Optional override for the vision model name (uses default from preferences if omitted)",
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "description": "Max seconds to wait for vision analysis before timing out",
+                    "default": 15,
+                    "minimum": 1,
+                    "maximum": 120,
+                },
             },
             "required": [],
         },

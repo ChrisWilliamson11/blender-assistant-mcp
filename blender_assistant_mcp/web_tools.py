@@ -38,30 +38,41 @@ def web_search(query: str, num_results: int = 5) -> dict:
             html = response.text
 
         results = []
+        meta_fetches = 0
 
         # Parse DuckDuckGo HTML results
         # DDG uses <div class="result"> for each result
         result_blocks = re.findall(
-            r'<div class="result[^"]*"[^>]*>(.*?)</div>\s*</div>', html, re.DOTALL
+            r'<div[^>]+class="[^"]*\bresult\b[^"]*"[^>]*>(.*?)</div>\s*</div>',
+            html,
+            re.DOTALL | re.IGNORECASE,
         )
 
         for block in result_blocks[:num_results]:
             # Extract title and URL from <a class="result__a" href="...">title</a>
             title_match = re.search(
-                r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([^<]+)</a>', block
+                r'<a[^>]+class="[^"]*\bresult__a\b[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+                block,
+                re.IGNORECASE | re.DOTALL,
             )
             # Extract snippet from <a class="result__snippet">...</a>
             snippet_match = re.search(
-                r'<a[^>]+class="result__snippet"[^>]*>([^<]+)</a>', block
+                r'<(?:a|div|span)[^>]+class="[^"]*\bresult__snippet\b[^"]*"[^>]*>(.*?)</(?:a|div|span)>',
+                block,
+                re.IGNORECASE | re.DOTALL,
             )
 
             if title_match:
                 url = unescape(title_match.group(1))
-                title = unescape(title_match.group(2))
+                title_html = unescape(title_match.group(2))
+                # Strip any nested tags in the title text
+                title = re.sub(r"<[^>]+>", "", title_html).strip()
                 snippet = ""
 
                 if snippet_match:
-                    snippet = unescape(snippet_match.group(1)).strip()
+                    snippet_html = unescape(snippet_match.group(1))
+                    # Strip any nested tags in the snippet text
+                    snippet = re.sub(r"<[^>]+>", "", snippet_html).strip()
 
                 # DuckDuckGo uses redirect URLs like //duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com
                 # Extract the actual URL from the uddg parameter
@@ -79,6 +90,34 @@ def web_search(query: str, num_results: int = 5) -> dict:
                     except Exception:
                         pass  # Keep original URL if parsing fails
 
+                # Fallback: if snippet empty, try fetching page meta description (limited quick fetches, no API keys)
+                if not snippet and url and meta_fetches < 3:
+                    try:
+                        with httpx.Client(follow_redirects=True) as client:
+                            resp2 = client.get(url, headers=headers, timeout=4.0)
+                            if resp2.status_code == 200:
+                                page = resp2.text
+                                # Prefer standard meta description, then og:description
+                                md = re.search(
+                                    r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
+                                    page,
+                                    re.IGNORECASE | re.DOTALL,
+                                )
+                                if not md:
+                                    md = re.search(
+                                        r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
+                                        page,
+                                        re.IGNORECASE | re.DOTALL,
+                                    )
+                                if md:
+                                    meta_txt = re.sub(
+                                        r"<[^>]+>", "", unescape(md.group(1))
+                                    ).strip()
+                                    if meta_txt:
+                                        snippet = meta_txt
+                    except Exception:
+                        pass
+                    meta_fetches += 1
                 results.append({"title": title.strip(), "url": url, "snippet": snippet})
 
         if not results:

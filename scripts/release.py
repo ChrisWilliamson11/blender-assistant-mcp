@@ -295,11 +295,36 @@ def set_or_update_bl_info_version(init_text: str, new_version: str) -> str:
 
 
 def update_init_py_version(path: Path, new_version: str, dry_run: bool) -> None:
-    text = read_text(path)
+    original_text = read_text(path)
+
+    text = original_text
+
+    # Normalize: remove any stray top-level "version": (X, Y, Z), lines appearing before bl_info
+    bl_info_match = re.search(r"(?m)^\s*bl_info\s*=\s*\{\s*$", text)
+    if bl_info_match:
+        prefix = text[: bl_info_match.start()]
+        suffix = text[bl_info_match.start() :]
+        # Remove standalone version tuple lines in the prefix
+        cleaned_prefix = re.sub(
+            r'(?m)^\s*"version"\s*:\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)\s*,\s*$',
+            "",
+            prefix,
+        )
+        text = cleaned_prefix + suffix
+
+    # Normalize: remove all existing __version__ lines; we'll insert/update a single one afterward
+    text = re.sub(r'(?m)^\s*__version__\s*=\s*["\'][^"\']+["\']\s*$', "", text)
+
+    # Collapse excessive blank lines introduced by removals
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # Apply canonical updates
     updated = set_or_insert_dunder_version(text, new_version)
     updated = set_or_update_bl_info_version(updated, new_version)
-    if updated != text:
+
+    if updated != original_text:
         write_text(path, updated, dry_run)
+
     else:
         info(
             "__init__.py did not require changes (no bl_info found and __version__ already correct?)"
@@ -531,13 +556,52 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if not INIT_PATH.exists():
         error(f"__init__.py not found: {INIT_PATH}")
         return 2
-    if not git_is_repo(args.dry_run):
+    if not args.update_existing and not git_is_repo(args.dry_run):
         error(
             "Not a Git repository. Initialize with 'git init' and add a remote before releasing."
         )
         return 2
 
     ext_id, current_version = read_manifest_id_version(MANIFEST_PATH)
+
+    if args.update_existing:
+        # Do not bump or modify versions; use current manifest version unless an explicit version is provided
+        target_version = args.new_version or current_version
+        print(f"Current version: {current_version}")
+        print(f"Target version:  {target_version} (update-existing)")
+
+        # Build zip unless --no-build is set
+        if args.no_build:
+            zip_path = REPO_ROOT / f"{ext_id}-{target_version}.zip"
+        else:
+            info("Building extension zip")
+            try:
+                zip_path = build_zip(target_version, ext_id, args.dry_run)
+            except Exception as e:
+                error(f"Build failed: {e}")
+                return 1
+
+        # Upload to existing GitHub release; skip commit/tag/push
+        tag = f"v{target_version}"
+        info("Uploading asset to existing GitHub release via gh")
+        try:
+            gh_release_upload(
+                tag=tag,
+                asset=zip_path,
+                repo=args.repo,
+                clobber=True,
+                dry_run=args.dry_run,
+            )
+        except Exception as e:
+            error(f"Failed to publish GitHub release: {e}")
+            return 1
+
+        print("\n✓ Release asset updated")
+        print(f"  Tag:    {tag}")
+        print(f"  Asset:  {zip_path.relative_to(REPO_ROOT)}")
+        print(f"  Repo:   {args.repo or '(inferred by gh)'}")
+        return 0
+
     target_version = args.new_version or bump_semver(
         current_version, args.bump or "patch"
     )

@@ -56,8 +56,6 @@ def read_manifest_id_version(path: Path) -> Tuple[str, str]:
 
 
 EXCLUDED_DIR_NAMES = {
-    # project-specific
-    "rag_db",
     # common Python/cache/tooling
     "__pycache__",
     ".pytest_cache",
@@ -75,6 +73,7 @@ EXCLUDED_DIR_NAMES = {
     "node_modules",
 }
 
+
 EXCLUDED_FILE_SUFFIXES = {
     ".pyc",
     ".pyo",
@@ -87,29 +86,43 @@ EXCLUDED_FILE_NAMES = {
     "Thumbs.db",
 }
 
+
 EXCLUDED_PATH_PATTERNS = (
     # Add glob-like substring patterns to exclude if needed
     # Example: "/tests/" to exclude tests within SOURCE_DIR
 )
 
 
+# Packaging options
+INCLUDE_RAG_DB = True
+
+
 def should_exclude_path(root: Path, name: str, is_dir: bool) -> bool:
     """
+
     Determine whether to exclude a directory entry from packaging.
+
     """
+
     if is_dir:
+        # Allow including rag_db when configured
+        if name == "rag_db" and INCLUDE_RAG_DB:
+            return False
         if name in EXCLUDED_DIR_NAMES:
             return True
 
     else:  # file
         if name in EXCLUDED_FILE_NAMES:
             return True
+
         for suffix in EXCLUDED_FILE_SUFFIXES:
             if name.endswith(suffix):
                 return True
 
     # Additional path-based pattern checks
+
     full_path_str = str((root / name).as_posix())
+
     for pattern in EXCLUDED_PATH_PATTERNS:
         if pattern in full_path_str:
             return True
@@ -193,13 +206,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         default=REPO_ROOT,
         help="Directory to write the zip to (default: repository root).",
     )
+
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print what would be packaged without creating the zip.",
     )
 
+    parser.add_argument(
+        "--include-rag-db",
+        action="store_true",
+        help="Include rag_db folder in the package (excluded by default).",
+    )
+
     args = parser.parse_args(list(argv) if argv is not None else None)
+    global INCLUDE_RAG_DB
+    INCLUDE_RAG_DB = args.include_rag_db
 
     if not SOURCE_DIR.exists():
         print(f"Error: Source directory not found: {SOURCE_DIR}", file=sys.stderr)
