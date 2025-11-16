@@ -2496,81 +2496,248 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
         if not aliases:
             return {"error": "Missing 'tool' or 'tools' parameter"}
 
-        # Map SDK-like aliases to MCP tool names
-        alias_map = {
-            # PolyHaven
-            "polyhaven.search": "search_polyhaven_assets",
-            "polyhaven.download": "download_polyhaven",
-            # Blender
-            "blender.get_scene_info": "get_scene_info",
-            "blender.get_object_info": "get_object_info",
-            "blender.list_collections": "list_collections",
-            "blender.get_collection_info": "get_collection_info",
-            "blender.create_collection": "create_collection",
-            "blender.move_to_collection": "move_to_collection",
-            "blender.set_collection_color": "set_collection_color",
-            "blender.delete_collection": "delete_collection",
-            "blender.get_selection": "get_selection",
-            "blender.get_active": "get_active",
-            "blender.set_selection": "set_selection",
-            "blender.set_active": "set_active",
-            "blender.select_by_type": "select_by_type",
-            "blender.create_object": "create_object",
-            "blender.modify_object": "modify_object",
-            "blender.delete_object": "delete_object",
-            "blender.set_material": "set_material",
-            # Vision
-            "vision.capture": "capture_viewport_for_vision",
-            "vision.capture_viewport": "capture_viewport_for_vision",
-            # Web
-            "web.search": "web_search",
-            "web.fetch": "fetch_webpage",
-            "web.extract_image_urls": "extract_image_urls",
-            "web.wikimedia_image": "search_wikimedia_image",
-            "web.download_image": "download_image_as_texture",
-            # Sketchfab
-            "sketchfab.login": "sketchfab_login",
-            "sketchfab.search": "sketchfab_search",
-            "sketchfab.download": "sketchfab_download_model",
-            # Stock Photos (conditional registration based on API keys)
-            "stock_photos.search": "search_stock_photos",
-            "stock_photos.download": "download_stock_photo",
-            # RAG
-            "rag.query": "rag_query",
-            "rag.get_stats": "rag_get_stats",
-            "rag.stats": "rag_get_stats",
+        # SDK-only guidance. Do not expose or echo MCP tool names/schemas here.
+        # assistant_help should teach how to use assistant_sdk.* methods.
+        # We still inspect the MCP registry only for conditional gating (e.g., stock photos).
+        tool_defs = mcp_tools.get_tools_list() or []
+        registered = {
+            t.get("name") for t in tool_defs if isinstance(t, dict) and t.get("name")
         }
 
-        # Define namespace expansions (each expands to a list of alias_map keys)
-        namespace_map = {
-            "web": [
-                "web.search",
-                "web.fetch",
-                "web.extract_image_urls",
-                "web.wikimedia_image",
-                "web.download_image",
-            ],
-            "sketchfab": [
-                "sketchfab.login",
-                "sketchfab.search",
-                "sketchfab.download",
-            ],
-            "stock_photos": [
-                "stock_photos.search",
-                "stock_photos.download",
-            ],
-            "vision": [
-                "vision.capture",
-                "vision.capture_viewport",
-            ],
-            "rag": [
-                "rag.query",
-                "rag.get_stats",
-            ],
-            "polyhaven": [
-                "polyhaven.search",
-                "polyhaven.download",
-            ],
+        # Helper: add a result row for a specific SDK alias
+        def _add_sdk_result(out: list, alias_key: str):
+            # PolyHaven
+            if alias_key == "polyhaven.search":
+                out.append(
+                    {
+                        "alias": "polyhaven.search",
+                        "sdkUsage": "assistant_sdk.polyhaven.search(asset_type='hdri'|'texture'|'model', query='', limit=10)",
+                        "notes": "Returns a dict with 'assets' (list of {id, name, ...}) and 'count'. Use assistant_sdk.polyhaven.download(asset=a, asset_type=...) to fetch.",
+                    }
+                )
+            elif alias_key == "polyhaven.download":
+                out.append(
+                    {
+                        "alias": "polyhaven.download",
+                        "sdkUsage": "assistant_sdk.polyhaven.download(asset=a or asset_id='id', asset_type='hdri'|'texture'|'model', resolution='2k')",
+                        "notes": "Pass either an asset dict from search or asset_id + asset_type. Resolution applies to hdri/texture; models default to 'blend'.",
+                    }
+                )
+            # Sketchfab
+            elif alias_key == "sketchfab.login":
+                out.append(
+                    {
+                        "alias": "sketchfab.login",
+                        "sdkUsage": "assistant_sdk.sketchfab.login(email, password, save_token=False)",
+                        "notes": "Log in to Sketchfab; token may be saved for subsequent calls if save_token=True.",
+                    }
+                )
+            elif alias_key == "sketchfab.search":
+                out.append(
+                    {
+                        "alias": "sketchfab.search",
+                        "sdkUsage": "assistant_sdk.sketchfab.search(query, page=1, per_page=24, downloadable_only=True, sort_by='relevance')",
+                        "notes": "Returns downloadable results when downloadable_only=True.",
+                    }
+                )
+            elif alias_key == "sketchfab.download":
+                out.append(
+                    {
+                        "alias": "sketchfab.download",
+                        "sdkUsage": "assistant_sdk.sketchfab.download(uid, import_into_scene=True, name_hint='')",
+                        "notes": "Downloads and imports the specified model UID.",
+                    }
+                )
+            # Stock Photos (gate on registration: only include if the stock tools are registered)
+            elif alias_key == "stock_photos.search":
+                if {"search_stock_photos", "download_stock_photo"} <= registered:
+                    out.append(
+                        {
+                            "alias": "stock_photos.search",
+                            "sdkUsage": "assistant_sdk.stock_photos.search(source='unsplash'|'pexels', query='...', per_page=10, orientation='')",
+                            "notes": "Requires API keys configured. Returns a provider-specific listing.",
+                        }
+                    )
+            elif alias_key == "stock_photos.download":
+                if {"search_stock_photos", "download_stock_photo"} <= registered:
+                    out.append(
+                        {
+                            "alias": "stock_photos.download",
+                            "sdkUsage": "assistant_sdk.stock_photos.download(source='unsplash'|'pexels', photo_id='...', apply_as_texture=True)",
+                            "notes": "Requires API keys configured. Can optionally apply to active object when apply_as_texture=True.",
+                        }
+                    )
+            # Web (SDK provides search wrapper)
+            elif alias_key == "web.search":
+                out.append(
+                    {
+                        "alias": "web.search",
+                        "sdkUsage": "assistant_sdk.web.search(query, num_results=5)",
+                        "notes": "Returns titles, URLs, and snippets. For image extraction or downloads, use dedicated MCP tools directly (not via assistant_help).",
+                    }
+                )
+            # RAG
+            elif alias_key == "rag.query":
+                out.append(
+                    {
+                        "alias": "rag.query",
+                        "sdkUsage": "assistant_sdk.rag.query(query, num_results=5, prefer_source=None, page_types=None, excerpt_chars=600)",
+                        "notes": "Augments prompts with local Blender docs chunks. prefer_source can bias to 'API' or 'Manual'.",
+                    }
+                )
+            elif alias_key == "rag.get_stats":
+                out.append(
+                    {
+                        "alias": "rag.get_stats",
+                        "sdkUsage": "assistant_sdk.rag.get_stats()",
+                        "notes": "Returns whether RAG is enabled and basic corpus stats.",
+                    }
+                )
+            # Blender (SDK wrappers mirror many native operations)
+            elif alias_key == "blender.get_scene_info":
+                out.append(
+                    {
+                        "alias": "blender.get_scene_info",
+                        "sdkUsage": "assistant_sdk.blender.get_scene_info(expand_depth=1, expand=[], focus=[], fold_state=None, max_children=50, include_icons=True, include_counts=True, root_filter=None)",
+                        "notes": "Outliner-style snapshot; persist fold_state across turns.",
+                    }
+                )
+            elif alias_key == "blender.get_object_info":
+                out.append(
+                    {
+                        "alias": "blender.get_object_info",
+                        "sdkUsage": "assistant_sdk.blender.get_object_info(name)",
+                        "notes": "Detailed info for a specific object.",
+                    }
+                )
+            elif alias_key == "blender.list_collections":
+                out.append(
+                    {
+                        "alias": "blender.list_collections",
+                        "sdkUsage": "assistant_sdk.blender.list_collections()",
+                        "notes": "List collections with hierarchy and counts.",
+                    }
+                )
+            elif alias_key == "blender.get_collection_info":
+                out.append(
+                    {
+                        "alias": "blender.get_collection_info",
+                        "sdkUsage": "assistant_sdk.blender.get_collection_info(collection_name)",
+                        "notes": "Info about a specific collection (color tag, objects, children).",
+                    }
+                )
+            elif alias_key == "blender.create_collection":
+                out.append(
+                    {
+                        "alias": "blender.create_collection",
+                        "sdkUsage": "assistant_sdk.blender.create_collection(name, parent=None)",
+                        "notes": "Create a collection at the scene root or under parent.",
+                    }
+                )
+            elif alias_key == "blender.move_to_collection":
+                out.append(
+                    {
+                        "alias": "blender.move_to_collection",
+                        "sdkUsage": "assistant_sdk.blender.move_to_collection(object_names, collection_name, unlink_from_others=True, create_if_missing=True)",
+                        "notes": "Batch move; unlinks from other collections by default.",
+                    }
+                )
+            elif alias_key == "blender.set_collection_color":
+                out.append(
+                    {
+                        "alias": "blender.set_collection_color",
+                        "sdkUsage": "assistant_sdk.blender.set_collection_color(collection_name=None, collection_names=None, color_tag='COLOR_01')",
+                        "notes": "Outliner color tag (Blender 4.2+).",
+                    }
+                )
+            elif alias_key == "blender.delete_collection":
+                out.append(
+                    {
+                        "alias": "blender.delete_collection",
+                        "sdkUsage": "assistant_sdk.blender.delete_collection(collection_name, delete_objects=False)",
+                        "notes": "Delete collection; optional delete of contained objects.",
+                    }
+                )
+            elif alias_key == "blender.get_selection":
+                out.append(
+                    {
+                        "alias": "blender.get_selection",
+                        "sdkUsage": "assistant_sdk.blender.get_selection()",
+                        "notes": "Get current selection list.",
+                    }
+                )
+            elif alias_key == "blender.get_active":
+                out.append(
+                    {
+                        "alias": "blender.get_active",
+                        "sdkUsage": "assistant_sdk.blender.get_active()",
+                        "notes": "Get the active object name if any.",
+                    }
+                )
+            elif alias_key == "blender.set_selection":
+                out.append(
+                    {
+                        "alias": "blender.set_selection",
+                        "sdkUsage": "assistant_sdk.blender.set_selection(object_names)",
+                        "notes": "Set the selection to a list of names.",
+                    }
+                )
+            elif alias_key == "blender.set_active":
+                out.append(
+                    {
+                        "alias": "blender.set_active",
+                        "sdkUsage": "assistant_sdk.blender.set_active(object_name)",
+                        "notes": "Set the active object by name.",
+                    }
+                )
+            elif alias_key == "blender.select_by_type":
+                out.append(
+                    {
+                        "alias": "blender.select_by_type",
+                        "sdkUsage": "assistant_sdk.blender.select_by_type(object_type)",
+                        "notes": "Select objects by Blender type (e.g., 'MESH').",
+                    }
+                )
+            elif alias_key == "blender.create_object":
+                out.append(
+                    {
+                        "alias": "blender.create_object",
+                        "sdkUsage": "assistant_sdk.blender.create_object(type, name=None, location=None, rotation=None, scale=None, text=None)",
+                        "notes": "Create objects (meshes, lights, cameras, text, curves, empties).",
+                    }
+                )
+            elif alias_key == "blender.modify_object":
+                out.append(
+                    {
+                        "alias": "blender.modify_object",
+                        "sdkUsage": "assistant_sdk.blender.modify_object(name, location=None, rotation=None, scale=None, visible=None, objects=None)",
+                        "notes": "Modify a single object or a batch via 'objects'.",
+                    }
+                )
+            elif alias_key == "blender.delete_object":
+                out.append(
+                    {
+                        "alias": "blender.delete_object",
+                        "sdkUsage": "assistant_sdk.blender.delete_object(name=None, names=None)",
+                        "notes": "Delete a single object or a batch by names list.",
+                    }
+                )
+            elif alias_key == "blender.set_material":
+                out.append(
+                    {
+                        "alias": "blender.set_material",
+                        "sdkUsage": "assistant_sdk.blender.set_material(object_name=None, object_names=None, material_name=None, color=None)",
+                        "notes": "Create/assign a material; optional RGBA color.",
+                    }
+                )
+
+        # SDK namespace expansions (assistant_sdk.* and short namespaces)
+        sdk_namespace_map = {
+            "polyhaven": ["polyhaven.search", "polyhaven.download"],
+            "sketchfab": ["sketchfab.login", "sketchfab.search", "sketchfab.download"],
+            "stock_photos": ["stock_photos.search", "stock_photos.download"],
+            "web": ["web.search"],
+            "rag": ["rag.query", "rag.get_stats"],
             "blender": [
                 "blender.get_scene_info",
                 "blender.get_object_info",
@@ -2584,71 +2751,35 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                 "blender.get_active",
                 "blender.set_selection",
                 "blender.set_active",
+                "blender.select_by_type",
                 "blender.create_object",
                 "blender.modify_object",
                 "blender.delete_object",
                 "blender.set_material",
-                "blender.select_by_type",
             ],
         }
 
-        # Pull current MCP tool registry
-        tool_defs = mcp_tools.get_tools_list() or []
-        names = {
-            t.get("name"): t for t in tool_defs if isinstance(t, dict) and t.get("name")
-        }
-        lowered = {k.lower(): k for k in names.keys()}
-
-        results = []
+        results: list[dict] = []
         for alias in aliases:
             norm = alias.lower().strip()
-
-            # Strip assistant_sdk. prefix when present
             if norm.startswith("assistant_sdk."):
                 norm = norm[len("assistant_sdk.") :]
 
-            # Namespace expansions (e.g., "web", "sketchfab", "stock_photos", "rag", "blender")
-            expanded_aliases: list[str] = []
+            # Namespace expansion
+            expanded: list[str] = []
             if norm in ("assistant_sdk",):
-                for ns_aliases in namespace_map.values():
-                    expanded_aliases.extend(ns_aliases)
-            elif norm in namespace_map:
-                expanded_aliases.extend(namespace_map[norm])
+                for v in sdk_namespace_map.values():
+                    expanded.extend(v)
+            elif norm in sdk_namespace_map:
+                expanded.extend(sdk_namespace_map[norm])
 
-            if expanded_aliases:
-                for ns_alias in expanded_aliases:
-                    resolved_name = alias_map.get(ns_alias)
-                    if not resolved_name or resolved_name not in names:
-                        continue
-                    t = names[resolved_name]
-                    results.append(
-                        {
-                            "tool": resolved_name,
-                            "description": t.get("description", ""),
-                            "inputSchema": t.get("inputSchema", {}),
-                        }
-                    )
+            if expanded:
+                for sku in expanded:
+                    _add_sdk_result(results, sku)
                 continue
 
-            # Single alias resolution path
-            resolved = alias_map.get(norm)
-            if not resolved:
-                # Try exact or case-insensitive MCP name
-                if alias in names:
-                    resolved = alias
-                elif norm in lowered:
-                    resolved = lowered[norm]
-            if not resolved or resolved not in names:
-                continue
-
-            t = names[resolved]
-            results.append(
-                {
-                    "tool": resolved,
-                    "description": t.get("description", ""),
-                    "inputSchema": t.get("inputSchema", {}),
-                }
-            )
+            # Single alias: accept only known SDK-style aliases; ignore raw MCP tool names
+            _add_sdk_result(results, norm)
 
         return {"results": results}
 
