@@ -16,7 +16,7 @@ _extension_dir = os.path.dirname(os.path.abspath(__file__))
 
     "version": (2, 1, 3),
 bl_info = {
-    "version": (2, 1, 2),
+    "version": (2, 1, 3),
     "blender": (4, 2, 0),
     "category": "3D View",
 }
