@@ -17,7 +17,7 @@ Features:
 
 MCP Tools:
 
-Below is a list of the tools exposed to the assistant. Each tool takes JSON-style arguments (shown by name only) but run through an SDK assistant_sdk to keep context light. It can use assistant_help to get information about tools, as well as get_scene_info to maintain a current image of the scene hierarchy, or other “info” tools such as viewport capture to understand the scene, then act with creation/modification tools.
+Below is a list of the tools. Each tool takes JSON-style arguments & can be exposed as an MCP tool, or discoverable through an SDK assistant_sdk to keep context light. If running through the sdk, the LLM can use assistant_help to get information about tools. It maintains a 'state' of the scene through 'get_scene_info' to maintain a current image of the scene hierarchy, similar to using an outliner.
 
 - Blender
   - get_scene_info(an outliner style representation of the scene)
