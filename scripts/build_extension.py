@@ -23,7 +23,8 @@ import zipfile
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 SOURCE_DIR = REPO_ROOT / "blender_assistant_mcp"
 MANIFEST_PATH = SOURCE_DIR / "blender_manifest.toml"
 

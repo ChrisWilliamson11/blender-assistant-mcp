@@ -322,12 +322,16 @@ def build_zip(new_version: str, ext_id: str, dry_run: bool) -> Path:
         print(f"[dry-run] Would build: {zip_path.name}")
         return zip_path
 
-    # Ensure repo root is on sys.path so we can import build_extension
+    # Ensure repo root is on sys.path so we can import scripts.build_extension
+
     sys.path.insert(0, str(REPO_ROOT))
+
     try:
-        import build_extension  # type: ignore
+        from scripts import build_extension  # type: ignore
+
     except Exception as e:
-        error(f"Could not import build_extension.py: {e}")
+        error(f"Could not import scripts/build_extension.py: {e}")
+
         raise
 
     # Call its main() entrypoint if present, otherwise fall back to build_extension.build_extension()

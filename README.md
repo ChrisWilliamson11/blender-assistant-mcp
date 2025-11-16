@@ -69,7 +69,14 @@ Copy the exe & DLL's from your Ollama installation with 'update_ollama_bins.py
 
 download the required python wheels with download_wheels.py
 
-package the extension with build_extension.py
+
+package the extension with scripts/build_extension.py
+
+Usage:
+- python scripts/build_extension.py
+- python scripts/build_extension.py --dry-run
+- python scripts/build_extension.py --output-dir dist
+
 
 install in blender as per usual, when its installed you can download models in the preferences, or point it to your existing Ollama models folder.
 

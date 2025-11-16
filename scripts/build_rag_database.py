@@ -24,10 +24,14 @@ from typing import Dict, List, Optional
 # --- New full-site crawler helpers (API + Manual, "current") ---
 from urllib.parse import urljoin, urlparse
 
-import requests
 from bs4 import BeautifulSoup
 
+# Ensure relative paths resolve from repository root (parent of 'scripts')
+REPO_ROOT = Path(__file__).resolve().parent.parent
+os.chdir(REPO_ROOT)
+
 BLOCKED_URLS = []
+
 FAILED_URLS = []
 
 
