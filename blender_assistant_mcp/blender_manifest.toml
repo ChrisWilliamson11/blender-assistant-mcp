@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "blender_assistant_mcp"
-version = "2.0.0"
+version = "2.1.0"
 name = "Blender Assistant with MCP"
 tagline = "GPU-accelerated AI assistant using Ollama for Blender automation"
 maintainer = "Blender MCP Community"
