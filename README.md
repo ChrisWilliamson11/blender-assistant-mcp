@@ -2,6 +2,7 @@ blender-assistant-mcp
 
 `blender-assistant-mcp` is an open source project that integrates an LLM into Blender using the Model Context Protocol (MCP).
 
+Its meant to be an interactive help / automation tool to allow you to free up some of the more mundane 3D tasks you dont enjoy, so you can spend more time on those you do. It excells at doing slightly 'fuzzy' but simple tasks than a built in operator doesnt do on its own.for example 'copy the bone constraints from every selected bone to its parent' or 'randomise the phase values of all the noise modifiers on every animation channel on my selected object' or 'why is my scene rendering black???' :D
 Features:
 
 - **Control Blender with Natural Language:** Send prompts to an Ollama LLM model to perform actions in Blender.
