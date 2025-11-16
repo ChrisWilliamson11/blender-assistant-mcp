@@ -414,7 +414,9 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                         print(
                             f"[DEBUG] Executing queued tool: {tool_name} with args: {args}"
                         )
-                        self._add_message("Assistant", f"→ Calling {tool_name}({args})")
+                        self._add_message(
+                            "Assistant", self._format_tool_call(tool_name, args)
+                        )
                         # Track objects/collections touched this turn for feedback loop
                         self._update_working_focus(tool_name, args)
                         try:
@@ -866,7 +868,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 self._start_http_request(context)
                 return
 
-            self._add_message("Assistant", f"→ Calling {tool_name}({args})")
+            self._add_message("Assistant", self._format_tool_call(tool_name, args))
             # Track objects/collections touched this turn for feedback loop
             self._update_working_focus(tool_name, args)
 
@@ -1115,7 +1117,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 self._start_http_request(context)
                 return
 
-            self._add_message("Assistant", f"→ Calling {tool_name}({args})")
+            self._add_message("Assistant", self._format_tool_call(tool_name, args))
             # Track objects/collections touched this turn for feedback loop
             self._update_working_focus(tool_name, args)
 
@@ -1658,6 +1660,47 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
             state_dict["http_error"] = str(e)
 
+    def _format_tool_call(self, tool_name: str, args: dict) -> str:
+        """Format a tool call message with proper code blocks for readability.
+
+        Args:
+            tool_name: Name of the tool being called
+            args: Dictionary of arguments
+
+        Returns:
+            Formatted message string with code blocks where appropriate
+        """
+        import json
+
+        # Start with the tool name
+        lines = [f"→ Calling **{tool_name}**"]
+
+        if not args:
+            return lines[0] + "()"
+
+        # Special handling for execute_code - extract code into code block
+        if tool_name == "execute_code" and "code" in args:
+            code = args.get("code", "")
+            lines.append("")
+            lines.append("```python")
+            lines.append(code)
+            lines.append("```")
+            # Show other args if any
+            other_args = {k: v for k, v in args.items() if k != "code"}
+            if other_args:
+                lines.append("")
+                lines.append("Other arguments:")
+                lines.append(f"```json\n{json.dumps(other_args, indent=2)}\n```")
+        else:
+            # For other tools, format args as JSON
+            lines.append("")
+            lines.append("Arguments:")
+            lines.append("```json")
+            lines.append(json.dumps(args, indent=2))
+            lines.append("```")
+
+        return "\n".join(lines)
+
     def _add_message(self, role, content, image_data=None, tool_name: str = ""):
         """Add message to chat and update UI.
 
@@ -1681,10 +1724,11 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         except Exception:
             pass
 
-        # Update UI
-        state["wm"].assistant_chat_message_index = (
-            len(state["active_session"].messages) - 1
-        )
+        # Update UI - only auto-select "You" and "Assistant" messages, not Tool/System
+        if role in ("You", "Assistant"):
+            state["wm"].assistant_chat_message_index = (
+                len(state["active_session"].messages) - 1
+            )
 
         # Force redraw
         for area in state["context_ref"].screen.areas:

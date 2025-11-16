@@ -2,7 +2,8 @@
 
 import bpy
 
-from . import tool_selector
+# Global set to track which code blocks are expanded (message_idx, block_idx)
+_expanded_code_blocks = set()
 
 
 class ASSISTANT_PT_panel(bpy.types.Panel):
@@ -19,21 +20,6 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
         prefs = context.preferences.addons[__package__].preferences
         wm = context.window_manager
         col = layout.column(align=True)
-
-        # Available Tools - at the top
-        box = col.box()
-        enabled_tools = tool_selector.get_enabled_tools()
-        tool_count = len(enabled_tools)
-
-        # Header row with refresh button
-        header_row = box.row(align=True)
-        if tool_count == 0:
-            # Red text when no tools
-            header_row.alert = True
-        header_row.label(text=f"Available Tools: {tool_count}", icon="TOOL_SETTINGS")
-        header_row.operator("assistant.refresh_tool_list", text="", icon="FILE_REFRESH")
-
-        col.separator()
 
         # Model Configuration - collapsible box
         box = col.box()
@@ -63,8 +49,20 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
             # (checking status blocks UI thread)
             status_box = box.box()
 
-            # Ollama server control
+            # Ollama server control with status indicator
             server_row = status_box.row(align=True)
+
+            # Check if model is loaded (cached, non-blocking)
+            try:
+                from . import ollama_subprocess
+
+                ollama = ollama_subprocess.get_ollama()
+                # Use cached status if available, don't block UI
+                # Store status for use in Chat label below
+                is_loaded = getattr(ollama, "_cached_model_loaded", None)
+            except Exception:
+                is_loaded = None
+
             server_row.label(text="Ollama Server:")
             server_row.operator("assistant.start_ollama", text="Start", icon="PLAY")
             server_row.operator("assistant.stop_ollama", text="Stop", icon="CANCEL")
@@ -92,6 +90,24 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
         # Chat session management
         box = col.box()
         row = box.row(align=True)
+
+        # Model status indicator - red/green dot
+        try:
+            from . import ollama_subprocess
+
+            ollama = ollama_subprocess.get_ollama()
+            is_loaded = getattr(ollama, "_cached_model_loaded", None)
+            if is_loaded is True:
+                row.label(text="●", icon="NONE")  # Green dot (will be theme green)
+            elif is_loaded is False:
+                row.alert = True
+                row.label(text="●", icon="NONE")  # Red dot (alert makes it red)
+                row.alert = False  # Reset alert for rest of row
+            else:
+                row.label(text="○", icon="NONE")  # Empty circle (unknown)
+        except Exception:
+            pass
+
         row.label(text="Chat:", icon="DOCUMENTS")
 
         # Session selector with +/- buttons
@@ -279,32 +295,116 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
                         )
                         img_box.label(text="Loading preview...")
 
-                # Use a scrollable text area for multi-line display
-                text_col = box.column(align=True)
-
-                # Split long lines to fit UI width (approximately 80 chars)
+                # Use a scrollable text area for multi-line display with improved formatting
+                import json
                 import textwrap
 
-                wrapped_lines = []
-                for line in selected_item.content.split("\n"):
-                    if len(line) > 80:
-                        wrapped_lines.extend(textwrap.wrap(line, width=80))
+                content = selected_item.content
+
+                # Special formatting for Tool messages with JSON
+                if selected_item.role == "Tool":
+                    try:
+                        # Try to parse as JSON and display hierarchically
+                        data = json.loads(content)
+                        self._draw_json_hierarchy(box, data, depth=0)
+                        # Skip normal text display for tool messages with valid JSON
+                        lines = []
+                    except (json.JSONDecodeError, Exception):
+                        # Not JSON or parsing failed, display as normal text
+                        lines = content.split("\n")
+                else:
+                    lines = content.split("\n")
+
+                # Process content line by line, detecting code blocks
+                in_code_block = False
+                code_block_lines = []
+                code_blocks = []  # Store all code blocks found
+                line_count = 0
+                max_lines = 30
+
+                # First pass - extract all code blocks
+                for line in lines:
+                    if line.strip().startswith("```"):
+                        if in_code_block:
+                            # End of code block
+                            if code_block_lines:
+                                code_blocks.append(list(code_block_lines))
+                                code_block_lines = []
+                            in_code_block = False
+                        else:
+                            # Start of code block
+                            in_code_block = True
+                        continue
+
+                    if in_code_block:
+                        code_block_lines.append(line)
                     else:
-                        wrapped_lines.append(line)
+                        # Regular text - wrap and display
+                        if line_count >= max_lines:
+                            box.label(
+                                text="... (truncated, copy to see full text)",
+                                icon="INFO",
+                            )
+                            break
+                        if len(line) > 80:
+                            wrapped = textwrap.wrap(line, width=80)
+                            for wrapped_line in wrapped:
+                                box.label(text=wrapped_line if wrapped_line else " ")
+                                line_count += 1
+                        else:
+                            box.label(text=line if line else " ")
+                            line_count += 1
 
-                # Display wrapped lines (limit to 30 lines to avoid UI overflow)
-                for line in wrapped_lines[:30]:
-                    text_col.label(text=line if line else " ")
+                # Handle unclosed code block
+                if in_code_block and code_block_lines:
+                    code_blocks.append(list(code_block_lines))
 
-                if len(wrapped_lines) > 30:
-                    text_col.label(
-                        text="... (message truncated, click to see full in console)"
+                # Display all code blocks as collapsible (default collapsed)
+                for idx, code_lines in enumerate(code_blocks):
+                    code_box = box.box()
+                    header_row = code_box.row(align=True)
+
+                    # Check if this code block is expanded
+                    block_key = (wm.assistant_chat_message_index, idx)
+                    is_expanded = block_key in _expanded_code_blocks
+
+                    # Toggle button
+                    icon = "TRIA_DOWN" if is_expanded else "TRIA_RIGHT"
+                    toggle_op = header_row.operator(
+                        "assistant.toggle_code_block",
+                        text="",
+                        icon=icon,
+                        emboss=False,
+                    )
+                    toggle_op.message_index = wm.assistant_chat_message_index
+                    toggle_op.block_index = idx
+
+                    header_row.label(
+                        text=f"Code ({len(code_lines)} lines):", icon="CONSOLE"
                     )
 
-                # Show character count and copy button
+                    # Copy button for this code block
+                    copy_op = header_row.operator(
+                        "assistant.copy_code_block",
+                        text="",
+                        icon="COPYDOWN",
+                        emboss=False,
+                    )
+                    copy_op.message_index = wm.assistant_chat_message_index
+                    copy_op.block_index = idx
+
+                    # Show code content if expanded
+                    if is_expanded:
+                        code_col = code_box.column(align=True)
+                        for code_line in code_lines[:30]:
+                            code_col.label(text=code_line if code_line else " ")
+                        if len(code_lines) > 30:
+                            code_col.label(
+                                text="... (code truncated, copy message for full code)"
+                            )
+
+                # Action buttons
                 footer_row = box.row()
-                char_count = len(selected_item.content)
-                footer_row.label(text=f"({char_count} characters)", icon="INFO")
                 footer_row.operator(
                     "assistant.copy_message", text="Copy to Clipboard", icon="COPYDOWN"
                 )
@@ -315,6 +415,69 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
                 )
         else:
             col.label(text="No active chat session")
+
+    def _draw_json_hierarchy(self, parent_box, data, depth=0, max_depth=5):
+        """Draw JSON data as nested boxes instead of raw text.
+
+        Args:
+            parent_box: Parent UI box to draw into
+            data: JSON data (dict, list, or primitive)
+            depth: Current nesting depth
+            max_depth: Maximum depth to expand
+        """
+        if depth > max_depth:
+            parent_box.label(text="... (too deeply nested)", icon="INFO")
+            return
+
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, (dict, list)) and value:
+                    # Nested structure - create a sub-box
+                    sub_box = parent_box.box()
+                    row = sub_box.row()
+                    row.label(text=f"{key}:", icon="DISCLOSURE_TRI_DOWN")
+                    self._draw_json_hierarchy(sub_box, value, depth + 1, max_depth)
+                else:
+                    # Simple value - display inline
+                    value_box = parent_box.box()
+                    row = value_box.row()
+                    if isinstance(value, bool):
+                        row.label(
+                            text=f"{key}: {str(value).lower()}",
+                            icon="CHECKMARK" if value else "PANEL_CLOSE",
+                        )
+                    elif value is None:
+                        row.label(text=f"{key}: null", icon="X")
+                    else:
+                        row.label(text=f"{key}: {value}")
+
+        elif isinstance(data, list):
+            if not data:
+                parent_box.label(text="(empty list)")
+            elif all(isinstance(item, (str, int, float, bool)) for item in data):
+                # Simple list - display items inline
+                for item in data[:10]:  # Limit to 10 items
+                    item_box = parent_box.box()
+                    item_box.label(text=f"• {item}")
+                if len(data) > 10:
+                    parent_box.label(
+                        text=f"... and {len(data) - 10} more items", icon="INFO"
+                    )
+            else:
+                # Complex list - create boxes for each item
+                for idx, item in enumerate(data[:10]):
+                    item_box = parent_box.box()
+                    row = item_box.row()
+                    row.label(text=f"[{idx}]", icon="DISCLOSURE_TRI_DOWN")
+                    self._draw_json_hierarchy(item_box, item, depth + 1, max_depth)
+                if len(data) > 10:
+                    parent_box.label(
+                        text=f"... and {len(data) - 10} more items", icon="INFO"
+                    )
+
+        else:
+            # Primitive value
+            parent_box.label(text=str(data))
 
 
 class ASSISTANT_UL_chat(bpy.types.UIList):
@@ -327,7 +490,24 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
     ):
         if item is None:
             return
-        split = layout.split(factor=0.18)
+
+        # Role-based row colors for better readability
+        # User (lightest), Assistant (medium), Tool (darkest)
+        row = layout.row(align=True)
+        if item.role == "You":
+            # User messages - lightest (almost white)
+            row.emboss = "NONE"
+        elif item.role == "Assistant":
+            # Assistant messages - medium gray
+            row.emboss = "PULLDOWN_MENU"
+        elif item.role == "Tool":
+            # Tool messages - darkest
+            row.emboss = "NORMAL"
+        else:
+            # System or other - default
+            row.emboss = "NONE_OR_STATUS"
+
+        split = row.split(factor=0.18)
         split.label(text=item.role)
 
         # Show content with image indicator if attached
@@ -335,6 +515,97 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
         if item.image_data:
             content_row.label(text="", icon="IMAGE_DATA")
         content_row.label(text=item.content)
+
+
+class ASSISTANT_OT_toggle_code_block(bpy.types.Operator):
+    """Toggle code block expansion"""
+
+    bl_idname = "assistant.toggle_code_block"
+    bl_label = "Toggle Code Block"
+    bl_options = {"REGISTER"}
+
+    message_index: bpy.props.IntProperty()
+    block_index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        global _expanded_code_blocks
+        block_key = (self.message_index, self.block_index)
+        if block_key in _expanded_code_blocks:
+            _expanded_code_blocks.remove(block_key)
+        else:
+            _expanded_code_blocks.add(block_key)
+
+        # Trigger UI redraw
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+        return {"FINISHED"}
+
+
+class ASSISTANT_OT_copy_code_block(bpy.types.Operator):
+    """Copy code block content to clipboard"""
+
+    bl_idname = "assistant.copy_code_block"
+    bl_label = "Copy Code Block"
+    bl_options = {"REGISTER"}
+
+    message_index: bpy.props.IntProperty()
+    block_index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        wm = context.window_manager
+
+        # Get the message
+        if not wm.assistant_chat_sessions:
+            return {"CANCELLED"}
+
+        active_idx = wm.assistant_active_chat_index
+        if active_idx < 0 or active_idx >= len(wm.assistant_chat_sessions):
+            return {"CANCELLED"}
+
+        active_session = wm.assistant_chat_sessions[active_idx]
+        if self.message_index < 0 or self.message_index >= len(active_session.messages):
+            return {"CANCELLED"}
+
+        selected_item = active_session.messages[self.message_index]
+        content = selected_item.content
+        lines = content.split("\n")
+
+        # Extract the specific code block
+        in_code_block = False
+        code_blocks = []
+        code_block_lines = []
+
+        for line in lines:
+            if line.strip().startswith("```"):
+                if in_code_block:
+                    if code_block_lines:
+                        code_blocks.append(code_block_lines)
+                        code_block_lines = []
+                    in_code_block = False
+                else:
+                    in_code_block = True
+                continue
+
+            if in_code_block:
+                code_block_lines.append(line)
+
+        # Handle unclosed code block
+        if in_code_block and code_block_lines:
+            code_blocks.append(code_block_lines)
+
+        # Get the requested block
+        if self.block_index < len(code_blocks):
+            code_text = "\n".join(code_blocks[self.block_index])
+            context.window_manager.clipboard = code_text
+            self.report(
+                {"INFO"}, f"Copied {len(code_blocks[self.block_index])} lines of code"
+            )
+        else:
+            self.report({"WARNING"}, "Code block not found")
+            return {"CANCELLED"}
+
+        return {"FINISHED"}
 
 
 class ASSISTANT_OT_paste_text(bpy.types.Operator):
@@ -427,9 +698,9 @@ class ASSISTANT_OT_copy_debug_conversation(bpy.types.Operator):
         except Exception:
             prefs = None
         try:
-            from . import ollama_subprocess, tool_selector
+            from . import assistant, ollama_subprocess
 
-            enabled_tools = tool_selector.get_enabled_tools()
+            enabled_tools = assistant.get_schema_tools()
             tool_count = len(enabled_tools)
             ollama = ollama_subprocess.get_ollama()
             ollama_running = bool(ollama.is_running())
@@ -832,14 +1103,69 @@ class ASSISTANT_OT_refresh_model_status(bpy.types.Operator):
 
     bl_idname = "assistant.refresh_model_status"
     bl_label = "Refresh Status"
-    bl_description = "Refresh model loading status"
+    bl_description = "Refresh model loading status (cached for UI performance)"
 
     def execute(self, context):
-        # Just trigger UI redraw
+        # Check and cache model loaded status (non-blocking on subsequent UI draws)
+        try:
+            from . import ollama_subprocess
+
+            prefs = context.preferences.addons[__package__].preferences
+            model_name = prefs.model_file if hasattr(prefs, "model_file") else None
+
+            if model_name and model_name != "NONE":
+                ollama = ollama_subprocess.get_ollama()
+                # Check if model is loaded
+                is_loaded = ollama.is_model_loaded(model_name)
+                # Cache the result for UI to read without blocking
+                ollama._cached_model_loaded = is_loaded is not None
+            else:
+                # No model selected
+                from . import ollama_subprocess
+
+                ollama = ollama_subprocess.get_ollama()
+                ollama._cached_model_loaded = False
+        except Exception as e:
+            print(f"[UI] Failed to check model status: {e}")
+            # Cache unknown state
+            try:
+                from . import ollama_subprocess
+
+                ollama = ollama_subprocess.get_ollama()
+                ollama._cached_model_loaded = None
+            except Exception:
+                pass
+
+        # Trigger UI redraw
         for area in context.screen.areas:
             if area.type == "VIEW_3D":
                 area.tag_redraw()
         return {"FINISHED"}
+
+
+def _update_model_status_cache():
+    """Periodic timer to update model status cache (non-blocking)."""
+    try:
+        if not bpy.context:
+            return 5.0  # Retry in 5 seconds
+
+        from . import ollama_subprocess
+
+        prefs = bpy.context.preferences.addons[__package__].preferences
+        model_name = prefs.model_file if hasattr(prefs, "model_file") else None
+
+        if model_name and model_name != "NONE":
+            ollama = ollama_subprocess.get_ollama()
+            is_loaded = ollama.is_model_loaded(model_name)
+            ollama._cached_model_loaded = is_loaded is not None
+        else:
+            ollama = ollama_subprocess.get_ollama()
+            ollama._cached_model_loaded = False
+    except Exception:
+        # Silently fail, cache remains at previous value
+        pass
+
+    return 5.0  # Check again in 5 seconds
 
 
 def register():
@@ -850,6 +1176,8 @@ def register():
 
     # Register classes
     bpy.utils.register_class(ASSISTANT_UL_chat)
+    bpy.utils.register_class(ASSISTANT_OT_toggle_code_block)
+    bpy.utils.register_class(ASSISTANT_OT_copy_code_block)
     bpy.utils.register_class(ASSISTANT_OT_paste_text)
     bpy.utils.register_class(ASSISTANT_OT_copy_message)
     bpy.utils.register_class(ASSISTANT_OT_copy_debug_conversation)
@@ -861,9 +1189,19 @@ def register():
     bpy.utils.register_class(ASSISTANT_PT_panel)
     bpy.utils.register_class(ASSISTANT_PT_presets)
 
+    # Start periodic model status cache update (every 5 seconds)
+    # Initialize immediately on startup
+    if not bpy.app.timers.is_registered(_update_model_status_cache):
+        _update_model_status_cache()  # Call once immediately
+        bpy.app.timers.register(_update_model_status_cache, first_interval=5.0)
+
 
 def unregister():
     """Unregister UI panel and operators"""
+    # Stop model status update timer
+    if bpy.app.timers.is_registered(_update_model_status_cache):
+        bpy.app.timers.unregister(_update_model_status_cache)
+
     # Unregister in reverse order
     bpy.utils.unregister_class(ASSISTANT_PT_presets)
     bpy.utils.unregister_class(ASSISTANT_PT_panel)
@@ -875,6 +1213,8 @@ def unregister():
     bpy.utils.unregister_class(ASSISTANT_OT_save_preset)
     bpy.utils.unregister_class(ASSISTANT_OT_copy_message)
     bpy.utils.unregister_class(ASSISTANT_OT_paste_text)
+    bpy.utils.unregister_class(ASSISTANT_OT_copy_code_block)
+    bpy.utils.unregister_class(ASSISTANT_OT_toggle_code_block)
     bpy.utils.unregister_class(ASSISTANT_UL_chat)
 
     # Delete window manager properties
