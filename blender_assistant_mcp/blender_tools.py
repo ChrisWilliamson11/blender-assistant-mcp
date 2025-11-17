@@ -180,6 +180,19 @@ def get_scene_info(
                 if k in type_map and v > 0 and type_map[k] not in icons:
                     icons.append(type_map[k])
 
+            # Active collection indicator
+            try:
+                vl = bpy.context.view_layer if bpy.context else None
+                active_col = (
+                    vl.active_layer_collection.collection
+                    if vl and getattr(vl, "active_layer_collection", None)
+                    else (bpy.context.collection if bpy.context else None)
+                )
+                if active_col is col and "Ac" not in icons:
+                    icons.append("Ac")
+            except Exception:
+                pass
+
         # Node record
         node = {
             "path": cpath,
@@ -280,11 +293,30 @@ def get_scene_info(
         "root_filter": root_filter or "",
     }
 
+    legend = (
+        {
+            "M": "Mesh",
+            "AR": "Armature",
+            "Lt": "Light",
+            "Cam": "Camera",
+            "Cur": "Curve",
+            "E": "Empty",
+            "Mo": "Has modifiers",
+            "Mat": "Has material(s)",
+            "Ch": "Has children",
+            "S": "Selected",
+            "A": "Active object",
+            "Ac": "Active collection",
+        }
+        if include_icons
+        else {}
+    )
     result = {
         "requested": requested,
         "outliner": {
             "lines": lines,
             "nodes": nodes,
+            "legend": legend,
         },
         "changed": {},
         "unchanged": {},
@@ -742,14 +774,18 @@ _CODE_NAMESPACE = None
 
 def _get_code_namespace():
     """Get or create the persistent code execution namespace."""
+
     global _CODE_NAMESPACE
+
     if _CODE_NAMESPACE is None:
         import mathutils
 
         try:
             from . import context_utils as _ctx_utils
+
         except Exception:
             _ctx_utils = None
+
         _CODE_NAMESPACE = {
             "bpy": bpy,
             "mathutils": mathutils,
@@ -761,6 +797,63 @@ def _get_code_namespace():
             "globals": lambda: _CODE_NAMESPACE,
             "assistant_sdk": _get_assistant_sdk(),
         }
+
+        # Install an importable shim module so 'import assistant_sdk' and
+        # 'from assistant_sdk.stock_photos import search' work inside execute_code.
+        try:
+            import sys
+            import types
+
+            sdk_obj = _CODE_NAMESPACE["assistant_sdk"]
+            # Create top-level module
+            _as_mod = types.ModuleType("assistant_sdk")
+            for _name in (
+                "polyhaven",
+                "blender",
+                "sketchfab",
+                "stock_photos",
+                "web",
+                "rag",
+            ):
+                if hasattr(sdk_obj, _name):
+                    setattr(_as_mod, _name, getattr(sdk_obj, _name))
+            # Create submodule for stock_photos with direct function proxies
+            _sp_mod = types.ModuleType("assistant_sdk.stock_photos")
+            if hasattr(sdk_obj, "stock_photos"):
+                _sp = sdk_obj.stock_photos
+                # Proxy functions if present
+                if hasattr(_sp, "search"):
+
+                    def _sp_search(*args, **kwargs):
+                        return _sp.search(*args, **kwargs)
+
+                    _sp_mod.search = _sp_search
+                if hasattr(_sp, "download"):
+
+                    def _sp_download(*args, **kwargs):
+                        return _sp.download(*args, **kwargs)
+
+            # Register modules
+            sys.modules["assistant_sdk"] = _as_mod
+            sys.modules["assistant_sdk.stock_photos"] = _sp_mod
+            # Optionally expose other submodules for import patterns
+            for _name in ("polyhaven", "blender", "sketchfab", "web", "rag"):
+                obj = getattr(sdk_obj, _name, None)
+                if obj is None:
+                    continue
+                _sub = types.ModuleType(f"assistant_sdk.{_name}")
+                try:
+                    for _attr in dir(obj):
+                        if not _attr.startswith("_"):
+                            setattr(_sub, _attr, getattr(obj, _attr))
+                except Exception:
+                    pass
+                sys.modules[f"assistant_sdk.{_name}"] = _sub
+            # Bind module into namespace for consistency with import-as usage
+            _CODE_NAMESPACE["assistant_sdk"] = _as_mod
+        except Exception:
+            # Best-effort; if this fails, direct namespace access still works
+            pass
     return _CODE_NAMESPACE
 
 
@@ -793,7 +886,7 @@ class _AssistantSDK:
             "- polyhaven.search(asset_type='hdri'|'texture'|'model', query='', limit=10);\n"
             "- polyhaven.download(asset=a or asset_id='id', asset_type='hdri'|'texture'|'model', resolution='2k')\n"
             "- sketchfab.login(email, password, save_token=False); sketchfab.search(query, page=1, per_page=24, downloadable_only=True, sort_by='relevance'); sketchfab.download(uid, import_into_scene=True, name_hint='')\n"
-            "- stock_photos.search(source, query, per_page=10, orientation=''); stock_photos.download(source, photo_id, apply_as_texture=True)\n"
+            "- stock_photos.search(source, query, per_page=10, orientation=''); stock_photos.download(source, photo_id, apply_as_texture=True, use_background=True); stock_photos.check_status(job_id)\n"
             "- web.search(query, num_results=5)\n"
             "- rag.query(query, num_results=5, prefer_source=None, page_types=None, excerpt_chars=600); rag.get_stats()\n"
             "\nOutliner Icon Legend: [M]=Mesh, [AR]=Armature, [Lt]=Light, [Cam]=Camera, [Cur]=Curve, [E]=Empty, [Mo]=Has modifiers, [Mat]=Has material(s), [Ch]=Has children, [S]=Selected, [A]=Active object\n"
@@ -1351,20 +1444,47 @@ class _AssistantSDK:
             self._mcp = mcp
 
         def search(
-            self, source: str, query: str, per_page: int = 10, orientation: str = ""
+            self,
+            source: str = "pexels",
+            query: str = "",
+            per_page: int = 10,
+            orientation: str = "",
+            limit: int | None = None,
+            **kwargs,
         ):
-            """Search stock photos by source.
+            """Search stock photos by source (resilient interface).
+
+
+
+            Accepts extra/unknown kwargs (ignored) and supports 'limit' as an alias for 'per_page'.
+            Returns a dict-like object that is also iterable/sliceable over the photo list,
+            so code like `results[:5]` and `for r in results:` works.
 
             Args:
-                source: 'unsplash' | 'pexels'.
-                query: Free text query.
-                per_page: Max results to return.
-                orientation: Optional orientation filter ('landscape' | 'portrait' | 'squarish').
+                source: 'unsplash' | 'pexels'
+                query: Free text query
+                per_page: Max results to return (default 10)
+                orientation: Optional orientation filter ('landscape' | 'portrait' | 'squarish')
+                limit: Alias for per_page (common LLM pattern)
+                **kwargs: Ignored (for robustness)
 
             Returns:
-                Dict with results list and metadata.
+
+                Dict-like with metadata, and iterable/sliceable over photos.
             """
-            return mcp_tools.execute_tool(
+
+            # Normalize alias
+            if limit is not None and (per_page is None or per_page == 10):
+                try:
+                    per_page = int(limit)
+                except Exception:
+                    pass
+
+            # Map 'squarish' (Unsplash) to 'square' (Pexels) transparently when possible
+            if orientation and orientation.lower() == "squarish":
+                orientation = "square"
+
+            data = mcp_tools.execute_tool(
                 "search_stock_photos",
                 {
                     "source": source,
@@ -1374,17 +1494,99 @@ class _AssistantSDK:
                 },
             )
 
-        def download(self, source: str, photo_id: str, apply_as_texture: bool = True):
-            """Download a stock photo and optionally apply as a texture to the active object.
+            # Wrap results so they behave like a list when iterated/sliced
+            class _SearchResult(dict):
+                def __init__(self, payload: dict):
+                    super().__init__(payload if isinstance(payload, dict) else {})
+                    self._items = []
+                    if isinstance(payload, dict):
+                        # Prefer 'photos', fallback to 'results'
+                        self._items = (
+                            payload.get("photos") or payload.get("results") or []
+                        )
+                        # Ensure list type
+                        if not isinstance(self._items, list):
+                            self._items = []
+                    else:
+                        # If some provider returns a list directly, keep it
+                        self._items = payload if isinstance(payload, list) else []
+
+                def __iter__(self):
+                    return iter(self._items)
+
+                def __len__(self):
+                    return len(self._items)
+
+                def __getitem__(self, key):
+                    # Allow list-style access/slicing: results[0], results[:5]
+                    if isinstance(key, (int, slice)):
+                        return self._items[key]
+                    # Fallback to dict access for metadata keys
+                    return super().__getitem__(key)
+
+            return _SearchResult(data)
+
+        def download(
+            self,
+            source: str | None = None,
+            photo_id: str | int | None = None,
+            apply_as_texture: bool = False,
+            **kwargs,
+        ):
+            """Download a stock photo and optionally apply it as a texture (resilient interface).
+
+
+
+            This method tolerates common LLM call patterns:
+
+            - download(photo_id=...)                      # explicit
+
+            - download(source='pexels', photo_id=...)     # explicit
+
+            - download('123456')                          # positional photo_id only; source inferred
+
+            - download('abc123')                          # positional unsplash-like ID; source inferred
+
+            - download(photo_id, destination='...')       # ignores unknown kwargs like 'destination'
+
+
 
             Args:
-                source: 'unsplash' | 'pexels'.
-                photo_id: Identifier returned by search().
-                apply_as_texture: If True, applies as an image texture to the active object (if possible).
+
+                source: 'unsplash' | 'pexels' (inferred if omitted)
+
+                photo_id: Identifier string/int from search results
+
+                apply_as_texture: Apply to active object if possible
+
+                **kwargs: Ignored (e.g., destination)
+
+
 
             Returns:
-                Dict describing the download (and application) result.
+
+                Dict with download status.
             """
+            # Support positional-only (download(photo_id)) calls
+            if (
+                source is not None
+                and photo_id is None
+                and isinstance(source, (str, int))
+            ):
+                photo_id, source = source, None
+
+            # Infer source if missing based on photo_id shape
+
+            if source is None:
+                if isinstance(photo_id, int) or (
+                    isinstance(photo_id, str) and photo_id.isdigit()
+                ):
+                    source = "pexels"
+
+                else:
+                    source = "unsplash"
+
+            # Ignore unknown kwargs such as 'destination'
             return mcp_tools.execute_tool(
                 "download_stock_photo",
                 {
@@ -2576,25 +2778,24 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                         "notes": "Downloads and imports the specified model UID.",
                     }
                 )
-            # Stock Photos (gate on registration: only include if the stock tools are registered)
+            # Stock Photos (always document, note API key/registration requirements)
             elif alias_key == "stock_photos.search":
-                if {"search_stock_photos", "download_stock_photo"} <= registered:
-                    out.append(
-                        {
-                            "alias": "stock_photos.search",
-                            "sdkUsage": "assistant_sdk.stock_photos.search(source='unsplash'|'pexels', query='...', per_page=10, orientation='')",
-                            "notes": "Requires API keys configured. Returns a provider-specific listing.",
-                        }
-                    )
+                out.append(
+                    {
+                        "alias": "stock_photos.search",
+                        "sdkUsage": "assistant_sdk.stock_photos.search(source='unsplash'|'pexels', query='...', per_page=10, orientation='')",
+                        "notes": "Requires API keys configured and tools registered. If not available, calls will return an error. Returns a provider-specific listing.",
+                    }
+                )
             elif alias_key == "stock_photos.download":
-                if {"search_stock_photos", "download_stock_photo"} <= registered:
-                    out.append(
-                        {
-                            "alias": "stock_photos.download",
-                            "sdkUsage": "assistant_sdk.stock_photos.download(source='unsplash'|'pexels', photo_id='...', apply_as_texture=True)",
-                            "notes": "Requires API keys configured. Can optionally apply to active object when apply_as_texture=True.",
-                        }
-                    )
+                out.append(
+                    {
+                        "alias": "stock_photos.download",
+                        "sdkUsage": "assistant_sdk.stock_photos.download(source='unsplash'|'pexels', photo_id='...', apply_as_texture=False)",
+                        "notes": "Requires API keys configured and tools registered. To apply to the active object, set apply_as_texture=True explicitly.",
+                    }
+                )
+
             # Web (SDK provides search wrapper)
             elif alias_key == "web.search":
                 out.append(
@@ -2763,7 +2964,10 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
         sdk_namespace_map = {
             "polyhaven": ["polyhaven.search", "polyhaven.download"],
             "sketchfab": ["sketchfab.login", "sketchfab.search", "sketchfab.download"],
-            "stock_photos": ["stock_photos.search", "stock_photos.download"],
+            "stock_photos": [
+                "stock_photos.search",
+                "stock_photos.download",
+            ],
             "web": ["web.search"],
             "rag": ["rag.query", "rag.get_stats"],
             "blender": [

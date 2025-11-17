@@ -2,8 +2,61 @@
 
 import bpy
 
-# Ollama is always available (subprocess-based)
 LLAMA_CPP_AVAILABLE = True
+
+
+# Add-on preferences for API keys so stock photo tools can detect configured providers
+class AssistantPreferences(bpy.types.AddonPreferences):
+    bl_idname = __package__
+
+    # Optional: local models folder for Ollama (already referenced defensively elsewhere)
+    models_folder: bpy.props.StringProperty(
+        name="Ollama Models Folder",
+        description="Optional custom location for Ollama models (leave blank to use default)",
+        default="",
+        subtype="DIR_PATH",
+    )
+
+    # Stock photos API keys
+    pexels_api_key: bpy.props.StringProperty(
+        name="Pexels API Key",
+        description="API key for Pexels (https://www.pexels.com/api/). Required for Pexels search/download tools.",
+        default="",
+        subtype="PASSWORD",
+    )
+    unsplash_api_key: bpy.props.StringProperty(
+        name="Unsplash API Key",
+        description="API key for Unsplash (https://unsplash.com/developers). Required for Unsplash search/download tools.",
+        default="",
+        subtype="PASSWORD",
+    )
+
+    def draw(self, context):
+        layout = self.layout
+        col = layout.column(align=True)
+
+        # Ollama settings (optional convenience)
+        box = col.box()
+        box.label(text="Ollama", icon="SYSTEM")
+        box.prop(self, "models_folder")
+
+        # Stock Photos settings
+        box = col.box()
+        box.label(text="Stock Photos", icon="IMAGE_DATA")
+        box.prop(self, "pexels_api_key")
+        box.prop(self, "unsplash_api_key")
+        box.label(text="Notes:", icon="INFO")
+        box.label(
+            text="- Pexels and Unsplash keys enable the corresponding search/download tools."
+        )
+        box.label(text="- Downloads run in background to avoid UI lockups.")
+
+
+# Ensure the preferences class is registered so get_preferences() can access it early
+try:
+    bpy.utils.register_class(AssistantPreferences)
+except Exception:
+    pass
 
 from . import ollama_adapter as llama_manager
 
@@ -23,12 +76,166 @@ _library_search_state = {
 
 
 def get_preferences():
-    """Get the extension preferences.
+    """Get the extension preferences (robust across extension IDs) and
+    ensure Stock Photo tools are registered regardless of keys.
 
     Returns:
-        AssistantPreferences: The preferences object
+        AssistantPreferences or a shim with expected attributes.
     """
-    return bpy.context.preferences.addons[__package__].preferences
+    # 1) Find the correct addon preferences entry across possible IDs
+    try:
+        addons = bpy.context.preferences.addons
+    except Exception:
+        addons = {}
+
+    prefs_obj = None
+
+    # Preferred: exact package key
+    try:
+        if __package__ in addons:
+            prefs_obj = addons[__package__].preferences
+    except Exception:
+        prefs_obj = None
+
+    # Common variants in extension builds (e.g., bl_ext.user_default.blender_assistant_mcp)
+    if prefs_obj is None:
+        try:
+            for key in addons.keys():
+                kl = key.lower()
+                if (
+                    "blender_assistant_mcp" in kl
+                    or kl.endswith(".blender_assistant_mcp")
+                    or kl == "bl_ext.user_default.blender_assistant_mcp"
+                ):
+                    prefs_obj = addons[key].preferences
+                    break
+        except Exception:
+            prefs_obj = None
+
+    # Fallback: scan for any addon preferences exposing expected fields
+    if prefs_obj is None:
+        try:
+            for key in addons.keys():
+                p = addons[key].preferences
+                if hasattr(p, "pexels_api_key") or hasattr(p, "unsplash_api_key"):
+                    prefs_obj = p
+                    break
+        except Exception:
+            prefs_obj = None
+
+    # Final fallback: return a shim with expected attributes to avoid crashes
+    if prefs_obj is None:
+
+        class _PrefsShim:
+            pexels_api_key = ""
+            unsplash_api_key = ""
+            models_folder = ""
+
+        prefs_obj = _PrefsShim()
+
+    # 2) Ensure Stock Photo tools are registered even if keys are missing.
+    # Runtime checks inside the tools will prevent usage without valid keys.
+    try:
+        from . import mcp_tools, stock_photo_tools
+
+        registered = {t.get("name") for t in (mcp_tools.get_tools_list() or [])}
+        need_search = "search_stock_photos" not in registered
+        need_download = "download_stock_photo" not in registered
+        need_status = "check_stock_photo_download" not in registered
+
+        if need_search or need_download:
+            # Minimal schemas; runtime functions still validate API keys.
+            search_schema = {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "enum": ["unsplash", "pexels"],
+                        "description": "Photo source to search",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (e.g., 'wood texture', 'sunset')",
+                    },
+                    "per_page": {
+                        "type": "number",
+                        "description": "Number of results (1-80, default: 10)",
+                        "default": 10,
+                    },
+                    "orientation": {
+                        "type": "string",
+                        "description": "Orientation filter: landscape, portrait, square/squarish",
+                    },
+                },
+                "required": ["source", "query"],
+            }
+
+            download_schema = {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "enum": ["unsplash", "pexels"],
+                        "description": "Photo source",
+                    },
+                    "photo_id": {
+                        "type": "string",
+                        "description": "Photo ID from search results",
+                    },
+                    "apply_as_texture": {
+                        "type": "boolean",
+                        "description": "Apply to active object as texture",
+                        "default": True,
+                    },
+                    "use_background": {
+                        "type": "boolean",
+                        "description": "Run download in background thread",
+                        "default": True,
+                    },
+                },
+                "required": ["source", "photo_id"],
+            }
+
+            if need_search:
+                mcp_tools.register_tool(
+                    "search_stock_photos",
+                    stock_photo_tools.search_stock_photos,
+                    "Search for stock photos (keys required at runtime).",
+                    search_schema,
+                    category="Stock Photos",
+                )
+
+            if need_download:
+                mcp_tools.register_tool(
+                    "download_stock_photo",
+                    stock_photo_tools.download_stock_photo,
+                    "Download a stock photo by ID (keys required at runtime).",
+                    download_schema,
+                    category="Stock Photos",
+                )
+
+        if need_status and hasattr(stock_photo_tools, "check_download_status"):
+            status_schema = {
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "Job ID returned from download_stock_photo",
+                    }
+                },
+                "required": ["job_id"],
+            }
+            mcp_tools.register_tool(
+                "check_stock_photo_download",
+                stock_photo_tools.check_download_status,
+                "Check the status of a background stock photo download job",
+                status_schema,
+                category="Stock Photos",
+            )
+    except Exception as e:
+        print(f"[Preferences] Stock tools self-registration failed: {e}")
+
+    return prefs_obj
 
 
 def infer_capabilities_from_name(model_name: str) -> dict:
