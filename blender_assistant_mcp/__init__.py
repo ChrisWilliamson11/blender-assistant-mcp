@@ -11,11 +11,11 @@ directly inside Blender's Python environment.
 import os
 import sys
 
-__version__ = "2.1.4"
+__version__ = "2.1.5"
 _extension_dir = os.path.dirname(os.path.abspath(__file__))
 
 bl_info = {
-    "version": (2, 1, 4),
+    "version": (2, 1, 5),
     "blender": (4, 2, 0),
     "category": "3D View",
 }
