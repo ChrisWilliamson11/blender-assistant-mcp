@@ -5,9 +5,9 @@ and inspect basic status, independent of automatic augmentation.
 """
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
-from .rag_system import get_rag_instance, is_rag_enabled, ensure_rag_loaded_async
+from .rag_system import ensure_rag_loaded_async, get_rag_instance, is_rag_enabled
 
 
 def _to_set_from_any(val: Any) -> Optional[set]:
@@ -49,7 +49,7 @@ def rag_query(
             return {
                 "success": False,
                 "enabled": False,
-                "message": "RAG is not enabled or database not found (still loading?). Build it in Preferences or bundle rag_db.",
+                "message": "RAG is not enabled or database not found (still loading?). Build it or bundle rag_db.",
             }
 
         # Normalize prefer_source
@@ -62,12 +62,15 @@ def rag_query(
                 pref = None
 
         # Query
-        docs = rag.query_documents(
-            query=query,
-            n_results=max(1, int(num_results or 5)),
-            prefer_source=pref,
-            exclude_indices=None,
-        ) or []
+        docs = (
+            rag.query_documents(
+                query=query,
+                n_results=max(1, int(num_results or 5)),
+                prefer_source=pref,
+                exclude_indices=None,
+            )
+            or []
+        )
 
         # Filter by page_types if provided
         allowed_types = _to_set_from_any(page_types)
@@ -84,15 +87,16 @@ def rag_query(
                 excerpt = text[:max_len - 1] + "\u2026"
             else:
                 excerpt = text
-            results.append({
-                "content": excerpt,
-                "similarity": float(d.get("similarity", 0.0)),
-                "source": md.get("source"),
-                "page_type": md.get("page_type"),
-                "file": md.get("file"),
-                "url": md.get("url"),
-                "index": d.get("index"),
-            })
+            results.append(
+                {
+                    "content": excerpt,
+                    "similarity": float(d.get("similarity", 0.0)),
+                    "page_type": md.get("page_type"),
+                    "file": md.get("file"),
+                    "url": md.get("url"),
+                    "index": d.get("index"),
+                }
+            )
 
         return {
             "success": True,
@@ -143,4 +147,3 @@ def register():
         {"type": "object", "properties": {}},
         category="RAG",
     )
-

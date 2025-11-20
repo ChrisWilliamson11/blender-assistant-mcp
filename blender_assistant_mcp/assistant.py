@@ -113,6 +113,43 @@ def build_system_prompt() -> str:
 
     tools_section = mcp_tools.get_tools_schema(enabled_tools=sorted(allowed_set))
 
+    # Build minimal SDK hints for namespaces not exposed via MCP tools (to reduce context bloat).
+    # These are terse, purpose-only lines; use assistant_help for exact signatures.
+    try:
+        registered_tools = {t.get("name") for t in (mcp_tools.get_tools_list() or [])}
+    except Exception:
+        registered_tools = set()
+    allowed = set(allowed_set)
+
+    def _exposed(*names):
+        return any(n in allowed for n in names)
+
+    hints = []
+    if not _exposed(
+        "create_object",
+        "modify_object",
+        "delete_object",
+        "list_collections",
+        "move_to_collection",
+        "set_material",
+        "get_scene_info",
+    ):
+        hints.append("- assistant_sdk.blender.* — scene/objects/collections/selection")
+    if not _exposed("search_polyhaven_assets", "download_polyhaven"):
+        hints.append("- assistant_sdk.polyhaven.search/download — PolyHaven assets")
+    if not _exposed("search_stock_photos", "download_stock_photo"):
+        hints.append(
+            "- assistant_sdk.stock_photos.search/download — Pexels/Unsplash (API keys)"
+        )
+    if not _exposed("sketchfab_login", "sketchfab_search", "sketchfab_download_model"):
+        hints.append("- assistant_sdk.sketchfab.login/search/download — Sketchfab")
+    if not _exposed("web_search"):
+        hints.append("- assistant_sdk.web.search — web results")
+    if not _exposed("rag_query", "rag_get_stats"):
+        hints.append("- assistant_sdk.rag.query/get_stats — Blender docs RAG")
+
+    sdk_hints_text = "\n".join(hints)
+
     return (
         "You are Blender Assistant — control Blender by writing Python code or calling native tools.\n\n"
         "SCENE VIEW (Outliner)\n"
@@ -123,7 +160,7 @@ def build_system_prompt() -> str:
         "  3) snapshot_after = get_scene_info(expand_depth=1, include_counts=True, fold_state=snapshot_before.fold_state)\n"
         "  4) Check deltas (object counts, collection membership changes, selection/active changes) rather than generic success.\n"
         "- Persist fold_state across turns to keep the Outliner view stable and readable.\n"
-        "- Outliner icon legend: [M]=Mesh, [AR]=Armature, [Lt]=Light, [Cam]=Camera, [Cur]=Curve, [E]=Empty, [Mo]=Has modifiers, [Mat]=Has material(s), [Ch]=Has children, [S]=Selected, [A]=Active object, [Ac]=Active collection\n"
+        "- Outliner icon legend: [M]=Mesh, [AR]=Armature, [Lt]=Light, [Cam]=Camera, [Cur]=Curve, [E]=Empty, [Mo]=Has modifiers, [Mat]=Has material(s), [Ch]=Has children, [S]=Selected, [A]=Active object, [Ac]=Active collection\n\n"
         "BEHAVIOR\n"
         "- Prefer native tools when they map to your task; use execute_code for custom logic\n"
         "- Use the RAG database to check documentation or API reference\n"
@@ -132,7 +169,17 @@ def build_system_prompt() -> str:
         "- Minimal explanations unless asked\n"
         "- When modifying the scene, call get_scene_info before and after to verify changes; report object count deltas or collection membership changes rather than generic success messages only. Always double check your work.\n"
         "- Keep things tidy: organize created objects into clearly named, color-coded collections.\n\n"
-        "TOOLS\n" + tools_section + "\n"
+        "TOOLS\n"
+        + tools_section
+        + (
+            (
+                "\nSDK Hints (use assistant_help for exact usage)\n"
+                + sdk_hints_text
+                + "\n"
+            )
+            if sdk_hints_text
+            else "\n"
+        )
     )
 
 
@@ -878,6 +925,42 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
             print(f"[DEBUG] Executing native tool: {tool_name} with args: {args}")
 
+            # Hard gate: if tool is not exposed, redirect to SDK path with hints
+            try:
+                allowed = set(state.get("allowed_tools_set") or [])
+            except Exception:
+                allowed = set()
+            if allowed and tool_name not in allowed:
+                lname = (tool_name or "").lower()
+                sdk_hint = None
+                if "rag" in lname:
+                    sdk_hint = "assistant_sdk.rag.query"
+                elif "web" in lname:
+                    sdk_hint = "assistant_sdk.web.search"
+                elif "polyhaven" in lname:
+                    sdk_hint = "assistant_sdk.polyhaven.search/download"
+                elif "sketchfab" in lname:
+                    sdk_hint = "assistant_sdk.sketchfab.search/download"
+                elif "stock" in lname or "photo" in lname:
+                    sdk_hint = "assistant_sdk.stock_photos.search/download"
+                elif any(k in lname for k in ["collection", "object", "material"]):
+                    sdk_hint = "assistant_sdk.blender.*"
+                mcp_list = ", ".join(sorted(allowed)) if allowed else "(none)"
+                msg = f"Tool '{tool_name}' is not exposed. Use available native tools: {mcp_list}."
+                if sdk_hint:
+                    msg += f" SDK available: {sdk_hint} (use inside execute_code; call assistant_help for usage)."
+                self._add_message("System", msg)
+                state["iteration"] += 1
+                if state["iteration"] >= state["max_iterations"]:
+                    self._add_message("System", "⚠️ Max iterations reached")
+                    state["state"] = "DONE"
+                    return
+                if state.get("tool_call_queue"):
+                    state["state"] = "EXECUTE_QUEUED"
+                    return
+                self._start_http_request(context)
+                return
+
             try:
                 result = mcp_tools.execute_tool(tool_name, args)
                 print(f"[DEBUG] Tool result: {result}")
@@ -1126,6 +1209,39 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             self._update_working_focus(tool_name, args)
 
             print(f"[DEBUG] Executing tool: {tool_name} with args: {args}")
+
+            # Hard gate: if tool is not exposed, redirect to SDK path with hints
+            try:
+                allowed = set(state.get("allowed_tools_set") or [])
+            except Exception:
+                allowed = set()
+            if allowed and tool_name not in allowed:
+                lname = (tool_name or "").lower()
+                sdk_hint = None
+                if "rag" in lname:
+                    sdk_hint = "assistant_sdk.rag.query"
+                elif "web" in lname:
+                    sdk_hint = "assistant_sdk.web.search"
+                elif "polyhaven" in lname:
+                    sdk_hint = "assistant_sdk.polyhaven.search/download"
+                elif "sketchfab" in lname:
+                    sdk_hint = "assistant_sdk.sketchfab.search/download"
+                elif "stock" in lname or "photo" in lname:
+                    sdk_hint = "assistant_sdk.stock_photos.search/download"
+                elif any(k in lname for k in ["collection", "object", "material"]):
+                    sdk_hint = "assistant_sdk.blender.*"
+                mcp_list = ", ".join(sorted(allowed)) if allowed else "(none)"
+                msg = f"Tool '{tool_name}' is not exposed. Use available native tools: {mcp_list}."
+                if sdk_hint:
+                    msg += f" SDK available: {sdk_hint} (use inside execute_code; call assistant_help for usage)."
+                self._add_message("System", msg)
+                state["iteration"] += 1
+                if state["iteration"] >= state["max_iterations"]:
+                    self._add_message("System", "⚠️ Max iterations reached")
+                    state["state"] = "DONE"
+                    return
+                self._start_http_request(context)
+                return
 
             try:
                 result = mcp_tools.execute_tool(tool_name, args)
@@ -1403,6 +1519,18 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         if disable_native_tools:
             use_tools = False
         tools_to_send = tools_all if use_tools else None
+        # Cache allowed tool names for gating in execution paths
+        try:
+            allowed_names = set()
+            if tools_to_send:
+                for _t in tools_to_send:
+                    fn = _t.get("function", {}) if isinstance(_t, dict) else {}
+                    nm = fn.get("name")
+                    if nm:
+                        allowed_names.add(nm)
+            state["allowed_tools_set"] = allowed_names
+        except Exception:
+            state["allowed_tools_set"] = set()
         if not use_tools:
             print(
                 "[DEBUG] Native tools disabled for this model; using text-based tool extraction."
@@ -2140,8 +2268,11 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 lines = (result.get("outliner", {}) or {}).get("lines", [])
                 if lines:
                     self._add_message(
-                        "Tool", "\n".join(lines), tool_name="get_scene_info"
+                        "Tool",
+                        "Automatic scene snapshot (Outliner):\n" + "\n".join(lines),
+                        tool_name="get_scene_info",
                     )
+
         except Exception:
             # Do not break the loop if snapshotting fails
 

@@ -181,19 +181,71 @@ def get_scene_info(
                     icons.append(type_map[k])
 
             # Active collection indicator
+
             try:
                 vl = bpy.context.view_layer if bpy.context else None
+
                 active_col = (
                     vl.active_layer_collection.collection
                     if vl and getattr(vl, "active_layer_collection", None)
                     else (bpy.context.collection if bpy.context else None)
                 )
+
                 if active_col is col and "Ac" not in icons:
                     icons.append("Ac")
+
             except Exception:
                 pass
 
-        # Node record
+            # If collection is collapsed, surface selection/active object presence on the collection itself
+
+            collapsed = not is_expanded(cpath, depth)
+
+            if include_icons and collapsed:
+                try:
+                    # Prefer recursive all_objects if available to mirror Outliner collapsed behavior
+
+                    objs = list(getattr(col, "all_objects", col.objects))
+
+                except Exception:
+                    try:
+                        objs = list(col.objects)
+
+                    except Exception:
+                        objs = []
+
+                has_sel = False
+
+                has_act = False
+
+                try:
+                    active_obj = bpy.context.active_object if bpy.context else None
+
+                except Exception:
+                    active_obj = None
+
+                for o in objs:
+                    try:
+                        if not has_sel and hasattr(o, "select_get") and o.select_get():
+                            has_sel = True
+
+                        if not has_act and active_obj is o:
+                            has_act = True
+
+                        if has_sel and has_act:
+                            break
+
+                    except Exception:
+                        pass
+
+                if has_sel and "S" not in icons:
+                    icons.append("S")
+
+                if has_act and "A" not in icons:
+                    icons.append("A")
+
+                    # Node record
+
         node = {
             "path": cpath,
             "kind": "collection",
@@ -867,29 +919,25 @@ class _AssistantSDK:
         self.web = self._Web(mcp)
         self.rag = self._RAG(mcp)
 
+        # SDK quick reference methods moved to class scope
+
     def call(self, name: str, **kwargs):
         return mcp_tools.execute_tool(name, kwargs)
 
+    def help(self) -> str:
+        """Return a concise SDK quick reference for first-turn planning.
+
+        This is purpose-only (no full signatures). The model should call
+        assistant_help('<namespace>') to fetch exact usage before coding.
+        """
         return (
-            "assistant_sdk quick reference:\n"
-            "- blender.get_scene_info(expand_depth=1, expand=[], focus=[], fold_state=None, max_children=50, include_icons=True, include_counts=True)\n"
-            "- blender.create_object(type, name=None, location=None, rotation=None, scale=None, text=None)\n"
-            "- blender.modify_object(name, location=None, rotation=None, scale=None, visible=None)\n"
-            "- blender.delete_object(name=None, names=None)\n"
-            "- blender.set_material(object_name=None, object_names=None, material_name=None, color=None)\n"
-            "- Scene organization (preferred):\n"
-            "  blender.list_collections(); blender.get_collection_info(collection_name); blender.create_collection(name, parent=None);\n"
-            "  blender.move_to_collection(object_names, collection_name, unlink_from_others=True, create_if_missing=True)  # unlinks from other collections by default; creates target if missing\n"
-            "  blender.set_collection_color(collection_name=None, collection_names=None, color_tag='COLOR_01')  # Blender 4.2+ Outliner color tag (not object materials)\n"
-            "  blender.delete_collection(collection_name, delete_objects=False)\n"
-            "- blender.get_selection(); blender.get_active(); blender.set_selection(object_names); blender.set_active(object_name); blender.select_by_type(object_type)\n"
-            "- polyhaven.search(asset_type='hdri'|'texture'|'model', query='', limit=10);\n"
-            "- polyhaven.download(asset=a or asset_id='id', asset_type='hdri'|'texture'|'model', resolution='2k')\n"
-            "- sketchfab.login(email, password, save_token=False); sketchfab.search(query, page=1, per_page=24, downloadable_only=True, sort_by='relevance'); sketchfab.download(uid, import_into_scene=True, name_hint='')\n"
-            "- stock_photos.search(source, query, per_page=10, orientation=''); stock_photos.download(source, photo_id, apply_as_texture=True, use_background=True); stock_photos.check_status(job_id)\n"
-            "- web.search(query, num_results=5)\n"
-            "- rag.query(query, num_results=5, prefer_source=None, page_types=None, excerpt_chars=600); rag.get_stats()\n"
-            "\nOutliner Icon Legend: [M]=Mesh, [AR]=Armature, [Lt]=Light, [Cam]=Camera, [Cur]=Curve, [E]=Empty, [Mo]=Has modifiers, [Mat]=Has material(s), [Ch]=Has children, [S]=Selected, [A]=Active object\n"
+            "assistant_sdk quick reference\n"
+            "- blender.* — scene/objects/collections/selection; use assistant_help('assistant_sdk.blender') for signatures\n"
+            "- polyhaven.search/download — PolyHaven assets (HDRIs, textures, models)\n"
+            "- stock_photos.search/download — Pexels/Unsplash (API keys); download(..., apply_as_texture=False)\n"
+            "- sketchfab.login/search/download — Sketchfab models\n"
+            "- web.search — basic web results (titles, URLs, snippets)\n"
+            "- rag.query/get_stats — Blender docs RAG (API/Manual); prefer_source='API'|'Manual'\n"
         )
 
     class _Polyhaven:
@@ -2742,7 +2790,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                     {
                         "alias": "polyhaven.search",
                         "sdkUsage": "assistant_sdk.polyhaven.search(asset_type='hdri'|'texture'|'model', query='', limit=10)",
-                        "notes": "Returns a dict with 'assets' (list of {id, name, ...}) and 'count'. Use assistant_sdk.polyhaven.download(asset=a, asset_type=...) to fetch.",
+                        "notes": "Use to find HDRIs, textures, or models on PolyHaven; iterate results['assets'] before downloading.",
                     }
                 )
             elif alias_key == "polyhaven.download":
@@ -2750,7 +2798,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                     {
                         "alias": "polyhaven.download",
                         "sdkUsage": "assistant_sdk.polyhaven.download(asset=a or asset_id='id', asset_type='hdri'|'texture'|'model', resolution='2k')",
-                        "notes": "Pass either an asset dict from search or asset_id + asset_type. Resolution applies to hdri/texture; models default to 'blend'.",
+                        "notes": "Use to download/import a PolyHaven asset; pass asset (dict) or asset_id + asset_type. For hdri/texture, set resolution.",
                     }
                 )
             # Sketchfab
@@ -2759,7 +2807,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                     {
                         "alias": "sketchfab.login",
                         "sdkUsage": "assistant_sdk.sketchfab.login(email, password, save_token=False)",
-                        "notes": "Log in to Sketchfab; token may be saved for subsequent calls if save_token=True.",
+                        "notes": "Authenticate with Sketchfab; optionally persist token via save_token=True.",
                     }
                 )
             elif alias_key == "sketchfab.search":
@@ -2767,7 +2815,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                     {
                         "alias": "sketchfab.search",
                         "sdkUsage": "assistant_sdk.sketchfab.search(query, page=1, per_page=24, downloadable_only=True, sort_by='relevance')",
-                        "notes": "Returns downloadable results when downloadable_only=True.",
+                        "notes": "Find downloadable models; set downloadable_only=True to filter; supports sorting.",
                     }
                 )
             elif alias_key == "sketchfab.download":
@@ -2775,7 +2823,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                     {
                         "alias": "sketchfab.download",
                         "sdkUsage": "assistant_sdk.sketchfab.download(uid, import_into_scene=True, name_hint='')",
-                        "notes": "Downloads and imports the specified model UID.",
+                        "notes": "Download/import the specified model UID into the scene.",
                     }
                 )
             # Stock Photos (always document, note API key/registration requirements)
@@ -2784,7 +2832,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                     {
                         "alias": "stock_photos.search",
                         "sdkUsage": "assistant_sdk.stock_photos.search(source='unsplash'|'pexels', query='...', per_page=10, orientation='')",
-                        "notes": "Requires API keys configured and tools registered. If not available, calls will return an error. Returns a provider-specific listing.",
+                        "notes": "Search Pexels/Unsplash (API keys required); returns a provider-specific 'photos' list.",
                     }
                 )
             elif alias_key == "stock_photos.download":
@@ -2792,7 +2840,7 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                     {
                         "alias": "stock_photos.download",
                         "sdkUsage": "assistant_sdk.stock_photos.download(source='unsplash'|'pexels', photo_id='...', apply_as_texture=False)",
-                        "notes": "Requires API keys configured and tools registered. To apply to the active object, set apply_as_texture=True explicitly.",
+                        "notes": "Download a photo; set apply_as_texture=True to apply to the active object.",
                     }
                 )
 
@@ -2802,26 +2850,30 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
                     {
                         "alias": "web.search",
                         "sdkUsage": "assistant_sdk.web.search(query, num_results=5)",
-                        "notes": "Returns titles, URLs, and snippets. For image extraction or downloads, use dedicated MCP tools directly (not via assistant_help).",
+                        "nativeTool": "web_search",
+                        "notes": "Retrieve basic web results (titles, URLs, snippets).",
                     }
                 )
             # RAG
+
             elif alias_key == "rag.query":
                 out.append(
                     {
                         "alias": "rag.query",
                         "sdkUsage": "assistant_sdk.rag.query(query, num_results=5, prefer_source=None, page_types=None, excerpt_chars=600)",
-                        "notes": "Augments prompts with local Blender docs chunks. prefer_source can bias to 'API' or 'Manual'.",
+                        "notes": "Use to look up relevant Blender API/Manual references from the local docs. Set prefer_source to 'API' or 'Manual' to bias results.",
                     }
                 )
+
             elif alias_key == "rag.get_stats":
                 out.append(
                     {
                         "alias": "rag.get_stats",
                         "sdkUsage": "assistant_sdk.rag.get_stats()",
-                        "notes": "Returns whether RAG is enabled and basic corpus stats.",
+                        "notes": "Check whether local docs are loaded (enabled) and basic corpus stats.",
                     }
                 )
+
             # Blender (SDK wrappers mirror many native operations)
             elif alias_key == "blender.get_scene_info":
                 out.append(
@@ -3013,7 +3065,14 @@ def assistant_help(tool: str = "", tools: list | None = None) -> dict:
             # Single alias: accept only known SDK-style aliases; ignore raw MCP tool names
             _add_sdk_result(results, norm)
 
-        return {"results": results}
+        dedup = []
+        seen = set()
+        for r in results:
+            key = (r.get("alias"), r.get("sdkUsage"))
+            if key not in seen:
+                seen.add(key)
+                dedup.append(r)
+        return {"results": dedup}
 
     except Exception as e:
         return {"error": f"assistant_help failed: {str(e)}"}

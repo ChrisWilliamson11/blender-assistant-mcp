@@ -53,9 +53,24 @@ class OllamaSubprocess:
     def start(self) -> bool:
         """Start the Ollama server subprocess.
 
+
+
         Returns:
+
             True if started successfully, False otherwise
+
         """
+
+        # External mode: do not start a bundled server; just verify availability
+        if getattr(self, "use_external", False):
+            if self.is_running():
+                print(f"[Ollama] Using external Ollama at {self.base_url}")
+                return True
+            print(
+                f"[Ollama] External Ollama not reachable at {self.base_url}. Please start it manually."
+            )
+            return False
+
         if self.is_running():
             print(f"[Ollama] Server already running at {self.base_url}")
             return True
@@ -99,8 +114,14 @@ class OllamaSubprocess:
 
     def stop(self):
         """Stop the Ollama server subprocess and all child processes."""
+
+        # External mode: never attempt to stop a user-managed server
+        if getattr(self, "use_external", False):
+            print("[Ollama] External mode: not stopping external server")
+            return
         if self.process:
             print(f"[Ollama] Stopping server")
+
             try:
                 # On Windows, use taskkill to kill process tree
                 if os.name == "nt":
@@ -465,6 +486,52 @@ def get_ollama() -> OllamaSubprocess:
             print(f"[Ollama] Using default models directory")
 
         _ollama_instance = OllamaSubprocess(models_dir=models_dir)
+        # Apply external Ollama preferences if available
+        try:
+            use_ext = getattr(prefs, "use_external_ollama", False)
+            ext_url = getattr(prefs, "external_ollama_url", "")
+            if use_ext and ext_url:
+                _ollama_instance.use_external = True
+                _ollama_instance.base_url = ext_url
+        except Exception:
+            pass
+
+    # Always apply external Ollama preferences on each call and normalize URL
+    try:
+        import bpy as _bpy
+
+        prefs2 = None
+        if __package__ in _bpy.context.preferences.addons:
+            prefs2 = _bpy.context.preferences.addons[__package__].preferences
+        elif "blender_assistant_mcp" in _bpy.context.preferences.addons:
+            prefs2 = _bpy.context.preferences.addons[
+                "blender_assistant_mcp"
+            ].preferences
+        use_ext = getattr(prefs2, "use_external_ollama", False) if prefs2 else False
+        ext_url = getattr(prefs2, "external_ollama_url", "") if prefs2 else ""
+        if use_ext and ext_url:
+            u = str(ext_url).strip()
+            # Strip trailing /api and slashes
+            if u.endswith("/api") or u.endswith("/api/"):
+                u = u[: u.rfind("/api")]
+            while u.endswith("/"):
+                u = u[:-1]
+            # Add scheme if missing
+            if not (
+                u.lower().startswith("http://") or u.lower().startswith("https://")
+            ):
+                u = "http://" + u
+            _ollama_instance.use_external = True
+            _ollama_instance.base_url = u
+        else:
+            _ollama_instance.use_external = False
+            _ollama_instance.base_url = (
+                f"http://{_ollama_instance.host}:{_ollama_instance.port}"
+            )
+    except Exception:
+        # Do not fail if preferences unavailable
+        pass
+
     return _ollama_instance
 
 

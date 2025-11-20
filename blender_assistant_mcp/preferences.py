@@ -4,60 +4,6 @@ import bpy
 
 LLAMA_CPP_AVAILABLE = True
 
-
-# Add-on preferences for API keys so stock photo tools can detect configured providers
-class AssistantPreferences(bpy.types.AddonPreferences):
-    bl_idname = __package__
-
-    # Optional: local models folder for Ollama (already referenced defensively elsewhere)
-    models_folder: bpy.props.StringProperty(
-        name="Ollama Models Folder",
-        description="Optional custom location for Ollama models (leave blank to use default)",
-        default="",
-        subtype="DIR_PATH",
-    )
-
-    # Stock photos API keys
-    pexels_api_key: bpy.props.StringProperty(
-        name="Pexels API Key",
-        description="API key for Pexels (https://www.pexels.com/api/). Required for Pexels search/download tools.",
-        default="",
-        subtype="PASSWORD",
-    )
-    unsplash_api_key: bpy.props.StringProperty(
-        name="Unsplash API Key",
-        description="API key for Unsplash (https://unsplash.com/developers). Required for Unsplash search/download tools.",
-        default="",
-        subtype="PASSWORD",
-    )
-
-    def draw(self, context):
-        layout = self.layout
-        col = layout.column(align=True)
-
-        # Ollama settings (optional convenience)
-        box = col.box()
-        box.label(text="Ollama", icon="SYSTEM")
-        box.prop(self, "models_folder")
-
-        # Stock Photos settings
-        box = col.box()
-        box.label(text="Stock Photos", icon="IMAGE_DATA")
-        box.prop(self, "pexels_api_key")
-        box.prop(self, "unsplash_api_key")
-        box.label(text="Notes:", icon="INFO")
-        box.label(
-            text="- Pexels and Unsplash keys enable the corresponding search/download tools."
-        )
-        box.label(text="- Downloads run in background to avoid UI lockups.")
-
-
-# Ensure the preferences class is registered so get_preferences() can access it early
-try:
-    bpy.utils.register_class(AssistantPreferences)
-except Exception:
-    pass
-
 from . import ollama_adapter as llama_manager
 
 # Global cache for Ollama models
@@ -130,6 +76,8 @@ def get_preferences():
             pexels_api_key = ""
             unsplash_api_key = ""
             models_folder = ""
+            use_external_ollama = False
+            external_ollama_url = ""
 
         prefs_obj = _PrefsShim()
 
@@ -929,32 +877,77 @@ def _on_models_folder_update(self, context):
 
     from . import ollama_subprocess
 
+    def _norm_external_url(u: str) -> str:
+        try:
+            s = (u or "").strip()
+            if not s:
+                return ""
+            # Strip trailing /api or /api/ if present
+            if s.endswith("/api") or s.endswith("/api/"):
+                s = s[: s.rfind("/api")]
+            # Remove trailing slashes
+            while s.endswith("/"):
+                s = s[:-1]
+            # Ensure scheme
+            if not (
+                s.lower().startswith("http://") or s.lower().startswith("https://")
+            ):
+                s = "http://" + s
+            return s
+        except Exception:
+            return u
+
     try:
-        # Update environment for the subprocess
+        # Update environment for the subprocess (models folder override)
+
         if getattr(self, "models_folder", ""):
             os.environ["OLLAMA_MODELS"] = self.models_folder
+
         else:
             # Clear override to fall back to default
+
             os.environ.pop("OLLAMA_MODELS", None)
 
-        # Restart embedded Ollama so it picks up the new models directory
-        ollama_subprocess.stop_ollama()
-        started = ollama_subprocess.start_ollama()
+        # Normalize and persist external Ollama URL (idempotent)
+        try:
+            norm = _norm_external_url(getattr(self, "external_ollama_url", ""))
+            if norm and norm != self.external_ollama_url:
+                self.external_ollama_url = norm
+        except Exception:
+            pass
+
+        # Apply server mode based on external toggle
+        if getattr(self, "use_external_ollama", False):
+            # Ensure embedded server is stopped; do not start bundled server
+            ollama_subprocess.stop_ollama()
+
+            # Touch/get instance so it picks up latest prefs; external base_url is applied in get_ollama()
+            _ = ollama_subprocess.get_ollama()
+            started = False
+        else:
+            # Restart embedded Ollama so it picks up the current settings
+            ollama_subprocess.stop_ollama()
+            started = ollama_subprocess.start_ollama()
 
         # Refresh the models list (enum) without requiring a Blender restart
-        if started:
-            try:
-                bpy.ops.assistant.refresh_models()
-            except Exception:
-                pass
+
+        # Always try to refresh; external mode will query the external server.
+        try:
+            bpy.ops.assistant.refresh_models()
+
+        except Exception:
+            pass
 
         # Redraw Preferences UI so changes are visible immediately
+
         try:
             for area in context.screen.areas:
                 if area.type == "PREFERENCES":
                     area.tag_redraw()
+
         except Exception:
             pass
+
     except Exception as e:
         print(f"[Assistant] models_folder update failed: {e}")
 
@@ -1011,6 +1004,19 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         description="Custom folder to store GGUF models (leave empty for default)",
         default="",
         subtype="DIR_PATH",
+        update=_on_models_folder_update,
+    )
+    # External Ollama settings
+    use_external_ollama: bpy.props.BoolProperty(
+        name="Use External Ollama",
+        description="If enabled, do not start the bundled Ollama server; use the URL below",
+        default=False,
+        update=_on_models_folder_update,
+    )
+    external_ollama_url: bpy.props.StringProperty(
+        name="External Ollama URL",
+        description="Base URL of an existing Ollama server (e.g., http://127.0.0.1:11434)",
+        default="http://127.0.0.1:11434",
         update=_on_models_folder_update,
     )
 
@@ -1436,17 +1442,18 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         """Draw model management section."""
 
         box = layout.box()
-
-        box.label(text="Model Management", icon="PREFERENCES")
-
         col = box.column(align=True)
+        # External Ollama controls
+        col.prop(self, "use_external_ollama", text="Use External Ollama")
+        col.prop(self, "external_ollama_url", text="External Ollama URL")
+        col.separator()
+        box.label(text="Model Management", icon="PREFERENCES")
 
         # Custom models folder path
 
         col.prop(self, "models_folder", text="Models Folder")
 
         col.label(text="Leave empty to use default extension folder", icon="INFO")
-
         col.separator()
 
         # Model selection dropdown
