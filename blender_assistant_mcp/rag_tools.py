@@ -91,6 +91,7 @@ def rag_query(
                 {
                     "content": excerpt,
                     "similarity": float(d.get("similarity", 0.0)),
+                    "source": md.get("source"),
                     "page_type": md.get("page_type"),
                     "file": md.get("file"),
                     "url": md.get("url"),
