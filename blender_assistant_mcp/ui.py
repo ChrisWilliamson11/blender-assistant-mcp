@@ -794,6 +794,53 @@ class ASSISTANT_OT_paste_text(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class ASSISTANT_OT_paste_image(bpy.types.Operator):
+    """Paste image from clipboard (requires PIL/Pillow)"""
+    bl_idname = "assistant.paste_image"
+    bl_label = "Paste Image"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        try:
+            from PIL import ImageGrab
+            import io
+            import base64
+            
+            # Grab image from clipboard
+            img = ImageGrab.grabclipboard()
+            
+            if img is None:
+                self.report({"WARNING"}, "No image in clipboard")
+                return {"CANCELLED"}
+                
+            # Convert to RGB if needed
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+                
+            # Save to bytes
+            buffered = io.BytesIO()
+            img.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            
+            # Store in window manager
+            context.window_manager.assistant_pending_image = img_str
+            self.report({"INFO"}, "Image pasted successfully")
+            
+            # Trigger redraw
+            for area in context.screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
+                    
+            return {"FINISHED"}
+            
+        except ImportError:
+            self.report({"ERROR"}, "PIL/Pillow not installed. Cannot paste images.")
+            return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to paste image: {str(e)}")
+            return {"CANCELLED"}
+
+
 class ASSISTANT_OT_copy_message(bpy.types.Operator):
     """Copy selected message to clipboard"""
 
@@ -1394,6 +1441,7 @@ def register():
     bpy.utils.register_class(ASSISTANT_OT_toggle_json_node)
     bpy.utils.register_class(ASSISTANT_OT_copy_code_block)
     bpy.utils.register_class(ASSISTANT_OT_paste_text)
+    bpy.utils.register_class(ASSISTANT_OT_paste_image)
     bpy.utils.register_class(ASSISTANT_OT_copy_message)
     bpy.utils.register_class(ASSISTANT_OT_copy_debug_conversation)
     bpy.utils.register_class(ASSISTANT_OT_save_preset)
@@ -1427,6 +1475,7 @@ def unregister():
     bpy.utils.unregister_class(ASSISTANT_OT_run_preset)
     bpy.utils.unregister_class(ASSISTANT_OT_save_preset)
     bpy.utils.unregister_class(ASSISTANT_OT_copy_message)
+    bpy.utils.unregister_class(ASSISTANT_OT_paste_image)
     bpy.utils.unregister_class(ASSISTANT_OT_paste_text)
     bpy.utils.unregister_class(ASSISTANT_OT_copy_code_block)
     bpy.utils.unregister_class(ASSISTANT_OT_toggle_json_node)

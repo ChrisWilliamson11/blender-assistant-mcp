@@ -37,6 +37,17 @@ class ASSISTANT_OT_stop(bpy.types.Operator):
         self.report({"INFO"}, "Stop requested - will cancel after current step")
         return {"FINISHED"}
 
+class ASSISTANT_OT_continue_chat(bpy.types.Operator):
+    """Ask the assistant to continue generating"""
+    bl_idname = "assistant.continue_chat"
+    bl_label = "Continue"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        # Set a standard continue message
+        bpy.ops.assistant.send(message="Please continue.")
+        return {"FINISHED"}
+
 class ASSISTANT_OT_send(bpy.types.Operator):
     """Send message to assistant (runs in background, UI stays responsive)"""
     bl_idname = "assistant.send"
@@ -216,8 +227,10 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
 def register():
     bpy.utils.register_class(ASSISTANT_OT_stop)
+    bpy.utils.register_class(ASSISTANT_OT_continue_chat)
     bpy.utils.register_class(ASSISTANT_OT_send)
 
 def unregister():
     bpy.utils.unregister_class(ASSISTANT_OT_stop)
+    bpy.utils.unregister_class(ASSISTANT_OT_continue_chat)
     bpy.utils.unregister_class(ASSISTANT_OT_send)
