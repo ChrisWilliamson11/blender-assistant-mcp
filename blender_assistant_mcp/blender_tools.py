@@ -95,8 +95,8 @@ def get_scene_info(
             if len(getattr(obj, "children", []) or []) > 0:
                 icons.append("Ch")
 
-        except Exception:
-            pass
+        except Exception as e:
+            icons.append(f"Err:{str(e)}")
 
         # Selection and Active indicators (avoid [A] conflict with ARMATURE type icon)
         try:
@@ -503,21 +503,24 @@ def create_object(
             "error": f"Unsupported type: {obj_type}. Supported: {', '.join(supported)}"
         }
 
-    obj = bpy.context.active_object
+    try:
+        obj = bpy.context.active_object
 
-    # Set name if provided
-    if name:
-        obj.name = name
+        # Set name if provided
+        if name:
+            obj.name = name
 
-    # Apply transforms if provided
-    if location:
-        obj.location = location
-    if rotation:
-        obj.rotation_euler = rotation
-    if scale:
-        obj.scale = scale
+        # Apply transforms if provided
+        if location:
+            obj.location = location
+        if rotation:
+            obj.rotation_euler = rotation
+        if scale:
+            obj.scale = scale
 
-    return {"created": obj.name, "type": obj.type, "name": obj.name}
+        return {"created": obj.name, "type": obj.type, "name": obj.name}
+    except Exception as e:
+        return {"error": f"Failed to configure created object: {str(e)}"}
 
 
 def modify_object(
