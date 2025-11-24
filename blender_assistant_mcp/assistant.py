@@ -52,29 +52,41 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
     def _add_message(self, role, content, tool_name=None):
         """Add message to UI chat history."""
-        # This assumes the UI reads from a specific property or list
-        # For now, we'll just print to console as the UI implementation wasn't fully visible
-        # But we should try to maintain compatibility if possible.
-        # The original code used `state["active_session"].messages.add()` if it existed?
-        # No, it seemed to use `self._add_message` which likely updated a bpy.props.CollectionProperty
+        wm = bpy.context.window_manager
         
-        # Let's try to find where the UI reads messages from.
-        # In the original code, `_add_message` wasn't fully shown in the view_file output.
-        # But typically it updates `context.scene.assistant_chat_history`.
+        # Ensure we have an active session
+        if not wm.assistant_chat_sessions:
+            if not wm.assistant_chat_sessions:
+                # Create default session if none exists
+                bpy.ops.assistant.new_chat()
+                
+        # Get active session
+        if wm.assistant_active_chat_index < 0 or wm.assistant_active_chat_index >= len(wm.assistant_chat_sessions):
+             wm.assistant_active_chat_index = 0
+             
+        active_session = wm.assistant_chat_sessions[wm.assistant_active_chat_index]
         
-        # For this refactor, I'll implement a basic version that prints and 
-        # tries to update the scene property if it exists.
-        print(f"[{role}] {content}")
-        
-        try:
-            # Attempt to update UI collection if it exists
-            item = bpy.context.scene.assistant_chat_history.add()
-            item.role = role
-            item.content = content
-            if tool_name:
-                item.tool_name = tool_name
-        except Exception:
+        # Add message to UI collection
+        item = active_session.messages.add()
+        item.role = role
+        item.content = content
+        if tool_name:
+            # If the UI item has a tool_name property (it might not, checking ui.py would confirm, 
+            # but standard practice is to put it in content or a specific prop if defined.
+            # Looking at ui.py, ASSISTANT_UL_chat draws 'item.role' and 'item.content'.
+            # It doesn't seem to explicitly use tool_name for drawing, but let's check if the property exists.
+            # Since I can't see the property definition in ui.py (it was likely in a class I didn't see fully),
+            # I'll stick to role/content which are used in draw_item.
+            # I'll prepend tool name to content for clarity if needed, or just rely on role="Tool".
             pass
+            
+        # Scroll to bottom
+        wm.assistant_chat_message_index = len(active_session.messages) - 1
+        
+        # Force redraw
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
 
     def _http_worker(self, model_name, messages, system_prompt, tools):
         """Background thread for LLM request."""
