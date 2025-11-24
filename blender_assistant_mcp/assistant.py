@@ -110,7 +110,9 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         
         session = get_session(context)
         
-        # Add user message
+        # Ensure watcher is initialized
+        if not session.scene_watcher._initialized:
+            session.scene_watcher.capture_state()
         if self.message:
             session.add_message("user", self.message)
             self._add_message("User", self.message)
@@ -194,6 +196,10 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 else:
                     # Queue empty (shouldn't happen in EXECUTING state unless transitioned)
                     session.state = "IDLE"
+                    
+                    # Update scene watcher baseline so we don't report our own changes as user changes next time
+                    session.scene_watcher.capture_state()
+                    
                     return self._finish(context)
 
         return {"PASS_THROUGH"}

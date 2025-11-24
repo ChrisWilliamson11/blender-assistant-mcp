@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from . import mcp_tools
 from .tool_manager import ToolManager
 from .memory import MemoryManager
-from .memory import MemoryManager
+from .scene_watcher import SceneWatcher
 
 @dataclass
 class ToolCall:
@@ -109,6 +109,7 @@ class AssistantSession:
         self.model_name = model_name
         self.tool_manager = tool_manager
         self.memory_manager = MemoryManager()
+        self.scene_watcher = SceneWatcher()
         self.history: List[Dict[str, str]] = []
         self.tool_queue: List[ToolCall] = []
         self.state = "IDLE" # IDLE, THINKING, EXECUTING, DONE
@@ -136,8 +137,15 @@ class AssistantSession:
         sdk_hints = self.tool_manager.get_system_prompt_hints(self.enabled_tools)
         memory_context = self.memory_manager.get_context()
         
+        # Check for scene changes
+        scene_changes = self.scene_watcher.consume_changes()
+        scene_context = ""
+        if scene_changes:
+            scene_context = f"SCENE UPDATES (Since last turn)\n{scene_changes}\n\n"
+        
         return (
             "You are Blender Assistant — control Blender by writing Python code or calling native tools.\n\n"
+            f"{scene_context}"
             "MEMORY\n"
             f"{memory_context}\n\n"
             "BEHAVIOR\n"
