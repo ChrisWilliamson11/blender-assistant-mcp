@@ -1999,7 +1999,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
 
         tools_col.separator()
         tools_col.label(
-            text="Note: execute_code is always included as a safety guarantee.",
+            text="Note: execute_code is always enabled",
             icon="KEYFRAME_HLT",
         )
 

@@ -111,12 +111,12 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
         except Exception:
             pass
 
-        row.label(text="Chat:", icon="DOCUMENTS")
+        # row.label(text="Chat:", icon="DOCUMENTS")
 
         # Session selector with +/- buttons
         if wm.assistant_chat_sessions:
             # Dropdown with +/- buttons inline
-            row = box.row(align=True)
+            # row = box.row(align=True)
             row.prop(wm, "assistant_active_chat_enum", text="")
             row.operator("assistant.new_chat", text="", icon="ADD")
             row.operator("assistant.delete_chat", text="", icon="REMOVE")

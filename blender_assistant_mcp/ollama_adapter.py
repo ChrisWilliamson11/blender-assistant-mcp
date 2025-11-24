@@ -111,6 +111,7 @@ def chat_completion(
             with urllib.request.urlopen(req_local, timeout=300) as response_local:
                 print(f"[Ollama Adapter] Streaming response...")
                 content_parts: list[str] = []
+                thinking_parts: list[str] = []
                 final_tool_calls = None
                 last_message = None
                 top_level_tool_calls = None
@@ -128,6 +129,10 @@ def chat_completion(
                         # Ignore non-JSON keep-alives
                         continue
 
+                    # Debug: Show raw JSON to diagnose thinking fields (uncomment to debug)
+                    # if obj and not obj.get("done"):
+                    #     print(f"[Ollama Adapter] Raw chunk: {json.dumps(obj)[:200]}")
+
                     # Accumulate message/content
                     msg = obj.get("message")
                     if isinstance(msg, dict):
@@ -135,6 +140,16 @@ def chat_completion(
                         delta = msg.get("content")
                         if isinstance(delta, str) and delta:
                             content_parts.append(delta)
+
+                        # Capture thinking/reasoning content
+                        thinking = (
+                            msg.get("thinking")
+                            or msg.get("reasoning")
+                            or msg.get("thinking_content")
+                        )
+                        if isinstance(thinking, str) and thinking:
+                            thinking_parts.append(thinking)
+
                         if isinstance(msg.get("tool_calls"), list) and msg.get(
                             "tool_calls"
                         ):
@@ -151,17 +166,20 @@ def chat_completion(
 
                 # Build final message
                 content = "".join(content_parts) if content_parts else ""
+                thinking = "".join(thinking_parts) if thinking_parts else ""
                 tool_calls = final_tool_calls or top_level_tool_calls or None
 
                 final_message = {
                     "role": "assistant",
                     "content": content,
                 }
+                if thinking:
+                    final_message["thinking"] = thinking
                 if tool_calls:
                     final_message["tool_calls"] = tool_calls
 
                 print(
-                    f"[Ollama Adapter] Stream complete: {len(content)} chars, {len(tool_calls) if tool_calls else 0} tool calls"
+                    f"[Ollama Adapter] Stream complete: {len(content)} chars, {len(thinking)} thinking chars, {len(tool_calls) if tool_calls else 0} tool calls"
                 )
                 return {"message": final_message}
 

@@ -56,6 +56,102 @@ CODE_FIRST_CAP = {
 # LEAN_CAP removed (code-first always)
 
 
+def _compile_tool_calls_from_thinking(
+    model_path: str,
+    thinking_text: str,
+    allowed_tools: list[str],
+    *,
+    temperature: float = 0.1,
+    num_ctx: int = 4096,
+    gpu_layers: int = -1,
+    batch_size: int = 256,
+) -> list[dict]:
+    """
+    Tool-call compiler: convert free-form 'thinking' into a normalized list of tool calls.
+
+    - Returns a list of {"tool": str, "args": dict}
+    - Output is schema-validated JSON from a strict, low-temperature, no-thinking request
+    - The compiler is NOT allowed to execute tools; it only proposes calls. Execution happens downstream.
+    - The compiler may include 'assistant_help' calls to discover SDK details. Scene-changing tools are emitted as calls to be run later.
+    """
+    try:
+        # Strict system prompt (compiler role)
+        tools_sorted = sorted(allowed_tools or [])
+        system = (
+            "You are a tool-call compiler. Your job is to convert a free-form 'thinking' plan into a minimal, "
+            "ordered list of executable tool calls.\n\n"
+            "Rules:\n"
+            "- Output ONLY a JSON array (no prose, no markdown, no code fences).\n"
+            '- Each element must be an object with keys: "tool" (string) and "args" (object).\n'
+            "- Allowed tools: " + ", ".join(tools_sorted) + ".\n"
+            "- You may include 'assistant_help' calls for SDK discovery; do not embed assistant_help inside Python.\n"
+            '- For fold state from a previous snapshot, put the literal string "__FOLD_STATE__".\n'
+            "- Prefer a small, sufficient sequence that achieves the plan.\n\n"
+            "Example:\n"
+            "[\n"
+            '  {"tool":"get_scene_info","args":{"expand_depth":1,"include_counts":true}},\n'
+            '  {"tool":"assistant_help","args":{"query":"assistant_sdk.blender.* overview"}},\n'
+            '  {"tool":"execute_code","args":{"code":"import bpy\\n# ...valid code..."}},\n'
+            '  {"tool":"move_to_collection","args":{"object_names":["Sun","Earth"],"collection_name":"Solar System","unlink_from_others":true}},\n'
+            '  {"tool":"get_scene_info","args":{"expand_depth":1,"include_counts":true,"fold_state":"__FOLD_STATE__"}}\n'
+            "]"
+        )
+
+        # Strict JSON Schema for compilation output
+        schema = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["tool", "args"],
+                "properties": {
+                    "tool": {"type": "string", "enum": tools_sorted},
+                    "args": {"type": "object", "additionalProperties": True},
+                },
+                "additionalProperties": False,
+            },
+        }
+
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": thinking_text or ""},
+        ]
+
+        # Invoke LLM in a strictly structured, low-temp, no-thinking mode
+        reply = llama_chat(
+            model_path=model_path,
+            messages=messages,
+            temperature=temperature,
+            num_ctx=num_ctx,
+            gpu_layers=gpu_layers,
+            batch_size=batch_size,
+            tools=None,  # compiler does not execute tools; it only proposes calls
+            format=schema,  # force structured JSON output by schema
+            think=False,  # no chain-of-thought here
+        )
+
+        # Parse result content as JSON
+        content = (reply or {}).get("content") or ""
+        calls_raw = json.loads(content)
+
+        # Normalize and filter to allowed tools
+        result: list[dict] = []
+        if isinstance(calls_raw, list):
+            for item in calls_raw:
+                if not isinstance(item, dict):
+                    continue
+                t = item.get("tool")
+                a = item.get("args")
+                if isinstance(t, str) and t in tools_sorted and isinstance(a, dict):
+                    result.append({"tool": t, "args": a})
+
+        print(f"[DEBUG] Tool-call compiler produced {len(result)} calls")
+        return result
+
+    except Exception as e:
+        print(f"[DEBUG] Tool-call compiler failure: {e}")
+        return []
+
+
 def _model_supports_thinking(model_path: str) -> bool:
     """Return True if the model is expected to support the Ollama 'think' param.
     Conservative: mistral/nemo families often do not support it, so return False.
@@ -64,6 +160,9 @@ def _model_supports_thinking(model_path: str) -> bool:
     if "mistral" in name or "nemo" in name:
         return False
     return True
+
+
+# Compiler helpers moved into ASSISTANT_OT_send class methods
 
 
 def build_system_prompt() -> str:
@@ -396,7 +495,7 @@ class ASSISTANT_OT_stop(bpy.types.Operator):
 
 
 class ASSISTANT_OT_send(bpy.types.Operator):
-    """Send message to AI assistant (runs in background, UI stays responsive)"""
+    """Send message to assistant (runs in background, UI stays responsive)"""
 
     bl_idname = "assistant.send"
     bl_label = "Send"
@@ -408,6 +507,219 @@ class ASSISTANT_OT_send(bpy.types.Operator):
     # We can't set instance attributes from threads, so use a shared dict
     _modal_state = {}
     _is_running = False  # Flag to prevent concurrent operations
+
+    # Compiler helpers (non-blocking)
+    def _compiler_worker(
+        self,
+        model_name: str,
+        thinking_text: str,
+        allowed_tools: list[str],
+        prefs,
+        state_dict,
+    ):
+        """Background worker: compile tool calls from thinking without blocking UI."""
+        try:
+            calls = _compile_tool_calls_from_thinking(
+                model_path=model_name,
+                thinking_text=thinking_text,
+                allowed_tools=sorted(list(allowed_tools or CODE_FIRST_CAP)),
+                temperature=0.1,
+                num_ctx=4096,
+                gpu_layers=getattr(prefs, "gpu_layers", -1) if prefs else -1,
+                batch_size=getattr(prefs, "batch_size", 256) if prefs else 256,
+            )
+        except Exception as e:
+            print(f"[DEBUG] Compiler worker error: {e}")
+            calls = []
+        try:
+            state_dict["compiled_calls"] = calls or []
+            state_dict["compiler_done"] = True
+        except Exception:
+            pass
+
+    def _on_compiler_done_timer(self):
+        """Timer callback to pick up compiled calls on the main thread."""
+        try:
+            state = self._modal_state
+        except Exception:
+            return None
+
+        # Timeout handling: if compiler hasn't finished within budget, fallback to Python block if available
+        try:
+            if not state.get("compiler_done"):
+                try:
+                    import time as _time
+
+                    started = float(state.get("compiler_started_at") or 0.0)
+                    timeout_s = float(state.get("compiler_timeout_s") or 0.0)
+                    if started and timeout_s and (_time.time() - started) >= timeout_s:
+                        # Timeout reached — try Python fallback from last thinking
+                        thinking_text = (
+                            state.get("last_compiler_thinking")
+                            or state.get("last_thinking")
+                            or ""
+                        )
+                        if thinking_text:
+                            try:
+                                import re as _re
+
+                                m = _re.search(
+                                    r"```(?:python|py)?\s*(.+?)\s*```",
+                                    thinking_text,
+                                    _re.DOTALL | _re.IGNORECASE,
+                                )
+                                code_block = m.group(1).strip() if m else ""
+                                if code_block and (
+                                    ("import bpy" in code_block)
+                                    or ("bpy." in code_block)
+                                ):
+                                    exec_call = {
+                                        "tool": "execute_code",
+                                        "args": {"code": code_block},
+                                    }
+                                    self._add_message(
+                                        "System",
+                                        "Compiler timed out — executing Python fallback from plan.",
+                                    )
+                                    state["tool_call_queue"] = [exec_call]
+                                    state["executing_queue"] = True
+                                    state["state"] = "EXECUTE_QUEUED"
+                                    # Reset flags and stop timer
+                                    state["compiled_calls"] = []
+                                    state["compiler_done"] = False
+                                    return None
+                            except Exception:
+                                pass
+                        # No fallback — nudge and continue loop
+                        self._add_message(
+                            "System",
+                            "Compiler timed out. Output ONLY a JSON tool call that changes the scene.",
+                        )
+                        # Reset and resume normal loop
+                        state["compiled_calls"] = []
+                        state["compiler_done"] = False
+                        self._start_http_request()
+                        return None
+                except Exception:
+                    pass
+                return 0.2  # keep polling
+        except Exception:
+            return 0.2
+
+        # Done – collect results
+        calls = state.get("compiled_calls") or []
+        state["compiled_calls"] = []
+        state["compiler_done"] = False
+
+        if calls:
+            # Substitute placeholders (e.g., fold_state) recursively (pre-execution normalization)
+            try:
+                fs = state.get("last_fold_state")
+
+                def _subst(v):
+                    if fs is None:
+                        return v
+                    if isinstance(v, str) and v == "__FOLD_STATE__":
+                        return fs
+                    if isinstance(v, dict):
+                        for kk, vv in list(v.items()):
+                            v[kk] = _subst(vv)
+                        return v
+                    if isinstance(v, list):
+                        return [_subst(x) for x in v]
+                    return v
+
+                for c in calls:
+                    if isinstance(c, dict):
+                        a = c.get("args")
+                        if a is not None:
+                            c["args"] = _subst(a)
+            except Exception:
+                pass
+
+            # Enqueue and execute now
+            self._add_message("Assistant", "💭 Thinking: Compiled tool calls ready.")
+            state["tool_call_queue"] = list(calls)
+            state["executing_queue"] = True
+            state["state"] = "EXECUTE_QUEUED"
+        else:
+            # Nothing produced — try Python fallback if possible
+            try:
+                thinking_text = (
+                    state.get("last_compiler_thinking")
+                    or state.get("last_thinking")
+                    or ""
+                )
+                if thinking_text:
+                    import re as _re
+
+                    m = _re.search(
+                        r"```(?:python|py)?\s*(.+?)\s*```",
+                        thinking_text,
+                        _re.DOTALL | _re.IGNORECASE,
+                    )
+                    code_block = m.group(1).strip() if m else ""
+                    if code_block and (
+                        ("import bpy" in code_block) or ("bpy." in code_block)
+                    ):
+                        exec_call = {
+                            "tool": "execute_code",
+                            "args": {"code": code_block},
+                        }
+                        self._add_message(
+                            "System",
+                            "Compiler produced no calls — executing Python fallback.",
+                        )
+                        state["tool_call_queue"] = [exec_call]
+                        state["executing_queue"] = True
+                        state["state"] = "EXECUTE_QUEUED"
+                        return None
+            except Exception:
+                pass
+            # Otherwise nudge to act and resume loop
+            self._add_message(
+                "System",
+                "⚠️ Compiler produced no calls. Output ONLY a JSON tool call that changes the scene.",
+            )
+            self._start_http_request()
+
+        return None  # stop timer
+
+    def _start_compiler_request(self, thinking_text: str, allowed_tools: list[str]):
+        """Start async compiler in a background thread and a timer to pick up results."""
+        try:
+            state = self._modal_state
+            prefs = state.get("prefs")
+            model_name = getattr(prefs, "model_file", "") if prefs else ""
+            # Reset flags
+            state["compiled_calls"] = []
+            state["compiler_done"] = False
+            # Track compile timing and thinking for timeout fallback
+            try:
+                import time as _time
+
+                state["compiler_started_at"] = _time.time()
+            except Exception:
+                pass
+            if "compiler_timeout_s" not in state:
+                state["compiler_timeout_s"] = 4.0
+            state["last_compiler_thinking"] = thinking_text or ""
+            state["last_compiler_thinking"] = thinking_text or ""
+            # Spawn worker
+            th = threading.Thread(
+                target=self._compiler_worker,
+                args=(model_name, thinking_text, allowed_tools, prefs, state),
+                daemon=True,
+            )
+            th.start()
+            print("[DEBUG] Compiler thread started")
+            # Register timer to poll completion on the main thread
+            bpy.app.timers.register(self._on_compiler_done_timer, first_interval=0.1)
+        except Exception as e:
+            print(f"[DEBUG] Failed to start compiler thread: {e}")
+            # Fallback to normal loop
+            self._start_http_request()
+            return
 
     def modal(self, context, event):
         global _stop_requested
@@ -846,7 +1158,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                     if native_tool_calls:
                         native_tool_call = native_tool_calls[0]
 
-        # If we have a native tool call, use it
+        # If we have native tool calls, execute them (supports multiple from thinking parser)
         if native_tool_call and native_tool_call.get("tool"):
             tool_name = native_tool_call.get("tool")
             args = native_tool_call.get("args", {})
@@ -871,7 +1183,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
             state["last_tool_call"] = {"tool": tool_name, "args": args}
 
-            # Queue remaining tool calls if we have multiple
+            # Queue remaining tool calls if we have multiple (from thinking or native)
             if len(native_tool_calls) > 1:
                 state["tool_call_queue"] = native_tool_calls[
                     1:
@@ -879,6 +1191,12 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 print(
                     f"[DEBUG] Queued {len(state['tool_call_queue'])} additional tool calls"
                 )
+                # Show user we're batching tool calls
+                if len(native_tool_calls) > 2:
+                    self._add_message(
+                        "System",
+                        f"📋 Executing {len(native_tool_calls)} tool calls in sequence...",
+                    )
 
             # Dedupe within this turn for native tool calls
             try:
@@ -972,6 +1290,15 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 except Exception:
                     pass
 
+                # Remember fold_state from get_scene_info for later compiler use
+                try:
+                    if tool_name == "get_scene_info" and isinstance(result, dict):
+                        fs = result.get("fold_state")
+                        if fs is not None:
+                            state["last_fold_state"] = fs
+                except Exception:
+                    pass
+
                 self._add_message(
                     "Tool", json.dumps(result, indent=2), tool_name=tool_name
                 )
@@ -1032,21 +1359,181 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             return
 
         # Fall back to text-based processing
-        if not reply:
-            # Check if we have thinking content to show (Ollama 'thinking' field)
-            raw_response = state.get("http_raw_response", {})
-            message = raw_response.get("message", {})
-            thinking = message.get("thinking", "") if isinstance(message, dict) else ""
+        # Check if we have thinking content (even if reply is non-empty from formatting)
+        raw_response = state.get("http_raw_response", {})
+        message = raw_response.get("message", {})
+        thinking = message.get("thinking", "") if isinstance(message, dict) else ""
+        content = message.get("content", "") if isinstance(message, dict) else ""
 
-            if thinking:
-                # Show thinking in chat log for user visibility, but do not echo it back to the LLM
+        # Handle thinking-only responses (no tool calls and no real content)
+        if thinking and not native_tool_calls and not content:
+            print(f"[DEBUG] Thinking-only handler entered: len={len(thinking)}")
+            # Short-circuit: start async compiler immediately, avoid further HTTP until done
+            try:
+                prefs = state.get("prefs")
+                model_name = getattr(prefs, "model_file", "") if prefs else ""
+                allowed_tools = sorted(
+                    list(state.get("allowed_tools_set") or CODE_FIRST_CAP)
+                )
+                print("[DEBUG] Tool-call compiler engaged (async)")
+                self._start_compiler_request(thinking, allowed_tools)
+                self._add_message("System", "Compiling tool calls…")
+                state["state"] = "WAITING_COMPILER"
+                return
+            except Exception as _e_comp:
+                print(f"[DEBUG] Tool-call compiler start failed: {_e_comp}")
+            # Try to extract tool calls embedded in thinking text (fallback parser)
+            import re
+
+            extracted_tool_calls = []
+
+            # Look for JSON blocks in markdown code blocks or standalone JSON
+            # Pattern 1: ```json ... ``` blocks
+            # Pattern 2: Standalone JSON objects with "name" and "arguments"
+
+            # First try markdown JSON blocks
+            json_blocks = re.findall(r"```json\s*(\{.*?\})\s*```", thinking, re.DOTALL)
+
+            # If no markdown blocks, try to extract JSON objects by counting braces
+            if not json_blocks:
+                i = 0
+                while i < len(thinking):
+                    if thinking[i] == "{":
+                        # Found potential JSON start, extract balanced braces
+                        brace_count = 0
+                        start = i
+                        for j in range(i, len(thinking)):
+                            if thinking[j] == "{":
+                                brace_count += 1
+                            elif thinking[j] == "}":
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    # Found complete JSON object
+                                    json_str = thinking[start : j + 1]
+                                    # Quick check if it looks like a tool call
+                                    if (
+                                        '"name"' in json_str
+                                        and '"arguments"' in json_str
+                                    ):
+                                        json_blocks.append(json_str)
+                                    i = j
+                                    break
+                    i += 1
+
+            # Parse extracted JSON blocks
+            for json_str in json_blocks:
+                try:
+                    tool_call_data = json.loads(json_str)
+                    if "name" in tool_call_data and "arguments" in tool_call_data:
+                        extracted_tool_calls.append(
+                            {
+                                "tool": tool_call_data["name"],
+                                "args": tool_call_data["arguments"],
+                            }
+                        )
+                except Exception as e:
+                    print(f"[DEBUG] Failed to parse thinking JSON: {e}")
+                    continue
+
+            # If we found tool calls in thinking, treat them as native tool calls
+            if extracted_tool_calls:
+                print(
+                    f"[DEBUG] Extracted {len(extracted_tool_calls)} tool calls from thinking text"
+                )
+                # Info-only guard: collapse repeated snapshots without action
+                info_only = all(
+                    (
+                        call.get("tool")
+                        in {
+                            "get_scene_info",
+                            "get_object_info",
+                            "list_collections",
+                            "get_collection_info",
+                        }
+                    )
+                    for call in extracted_tool_calls
+                )
+                if info_only:
+                    # Keep only one snapshot, nudge to act, and reduce thinking for GPT-OSS
+                    state["tool_call_queue"] = [extracted_tool_calls[0]]
+                    self._add_message(
+                        "System",
+                        "⚠️ Too many snapshots. Next, output ONLY a JSON tool call that changes the scene (e.g., execute_code/move_to_collection/create_collection).",
+                    )
+                    try:
+                        prefs = state.get("prefs")
+                        model_name = getattr(prefs, "model_file", "") if prefs else ""
+                        base_name = (model_name or "").split(":")[0].lower()
+                        if base_name == "gpt-oss":
+                            state["think_override"] = "low"
+                    except Exception:
+                        pass
+                else:
+                    # Execute all extracted tool calls this turn
+                    state["tool_call_queue"] = list(extracted_tool_calls)
+
+                print(
+                    f"[DEBUG] Will execute {len(state['tool_call_queue'])} tool calls (first: {state['tool_call_queue'][0]})"
+                )
+                # Surface truncated thinking for visibility
+                self._add_message("Assistant", f"💭 Thinking: {thinking[:500]}...")
+                # Hand over to the queued execution path to run tool calls now
+                state["executing_queue"] = True
+                state["state"] = "EXECUTE_QUEUED"
+                return
+
+                # First: invoke the tool-call compiler on the planner's thinking
+                try:
+                    prefs = state.get("prefs")
+                    model_name = getattr(prefs, "model_file", "") if prefs else ""
+                    allowed_tools = sorted(
+                        list(state.get("allowed_tools_set") or CODE_FIRST_CAP)
+                    )
+                    print("[DEBUG] Tool-call compiler engaged (async)")
+                    self._start_compiler_request(thinking, allowed_tools)
+                    self._add_message("System", "Compiling tool calls…")
+                    state["state"] = "WAITING_COMPILER"
+                    return
+                except Exception as _e_comp:
+                    print(f"[DEBUG] Tool-call compiler start failed: {_e_comp}")
+                    # fall through to python auto-wrap fallback
+
+                # Fallback: Try to auto-wrap Python code blocks into execute_code
+                code_block = None
+                try:
+                    m = re.search(
+                        r"```(?:python)?\s*(.+?)\s*```",
+                        thinking,
+                        re.DOTALL | re.IGNORECASE,
+                    )
+                    if m:
+                        candidate = m.group(1)
+                        if ("import bpy" in candidate) or ("bpy." in candidate):
+                            code_block = candidate
+                except Exception:
+                    code_block = None
+
+                if code_block:
+                    exec_call = {"tool": "execute_code", "args": {"code": code_block}}
+                    state["tool_call_queue"] = [exec_call]
+                    self._add_message("Assistant", f"💭 Thinking: {thinking[:300]}...")
+                    print("[DEBUG] Auto-wrapped python block into execute_code")
+                    state["executing_queue"] = True
+                    state["state"] = "EXECUTE_QUEUED"
+                    return
+
+                # No tool calls found - show thinking and nudge
                 self._add_message("Assistant", f"💭 Thinking: {thinking}")
+                # Also store raw thinking in session state for next request
+                state["last_thinking"] = thinking
 
                 # Nudge at most once per session to act on prior reasoning
                 if not state.get("thinking_nudge_done"):
                     nudge = (
-                        "Based on your prior reasoning, call the appropriate tool(s) now. "
-                        "Respond with ONLY the tool call payload(s) (no extra text). If done, reply TASK_COMPLETE."
+                        "You just finished reasoning about this task in detail. "
+                        "Now EXECUTE your plan by calling the appropriate tool(s). "
+                        "Your thinking outlined the exact steps - follow them now. "
+                        "Respond with ONLY the tool call JSON payload(s) (no explanatory text)."
                     )
                     state["active_session"].messages.add()
                     state["active_session"].messages[-1].role = "System"
@@ -1054,14 +1541,40 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                     self._add_message(
                         "System", "⚠️ Thinking detected — prompting model to act..."
                     )
+                    # Proactively reduce thinking for GPT-OSS on the next turn
+                    try:
+                        prefs = state.get("prefs")
+                        model_name = (
+                            getattr(prefs, "ollama_model_name", "") if prefs else ""
+                        )
+                        base_name = (model_name or "").split(":")[0].lower()
+                        if base_name == "gpt-oss":
+                            state["think_override"] = "low"
+                    except Exception:
+                        pass
                     state["thinking_nudge_done"] = True
                 else:
-                    # Enforce: disable thinking for next request to break the loop
-                    state["think_override"] = False
+                    # Enforce: reduce thinking to minimal for next request to break the loop
+                    # For GPT-OSS, use "low" thinking; for others, disable entirely
+                    prefs = state.get("prefs")
+                    model_name = (
+                        getattr(prefs, "ollama_model_name", "") if prefs else ""
+                    )
+                    base_name = (model_name or "").split(":")[0].lower()
+
+                    if base_name == "gpt-oss":
+                        state["think_override"] = "low"
+                        think_msg = "⚠️ CRITICAL: Reducing chain-of-thought to LOW. "
+                    else:
+                        state["think_override"] = False
+                        think_msg = "⚠️ CRITICAL: Chain-of-thought is now DISABLED. "
+
                     self._add_message(
                         "System",
-                        "⚠️ Thinking persisted — disabling chain-of-thought and enforcing tool-call-only output. "
-                        "Respond with ONLY the tool call payload(s); no extra text.",
+                        think_msg + "You are stuck in explanation mode. "
+                        "You MUST respond with tool calls in valid JSON format, NOT markdown tables or explanations. "
+                        'Use the EXACT format: {"name": "tool_name", "arguments": {...}}. '
+                        "DO NOT write summaries, tables, or text. OUTPUT ONLY JSON TOOL CALLS.",
                     )
 
                 # Continue to next iteration
@@ -1072,35 +1585,68 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                     return
                 self._start_http_request(context)
                 return
-            else:
-                # Truly empty response: nudge once, then give up
-                if not state.get("empty_retry_done"):
-                    nudge = (
-                        "No output received. If you cannot call a tool, reply with a brief text answer "
-                        "summarizing your reasoning or next steps."
-                    )
-                    # Add to chat history so LLM sees it on retry
-                    state["active_session"].messages.add()
-                    state["active_session"].messages[-1].role = "System"
-                    state["active_session"].messages[-1].content = nudge
 
+        # Handle truly empty response (no thinking, no content, no tool calls)
+        if not reply:
+            # Last-ditch: if planner returned thinking in raw response, start async compiler now
+            try:
+                raw_fallback = state.get("http_raw_response", {})
+                msg_fb = raw_fallback.get("message", {})
+                thinking_fb = (
+                    msg_fb.get("thinking", "") if isinstance(msg_fb, dict) else ""
+                )
+            except Exception:
+                thinking_fb = ""
+            if thinking_fb:
+                print(
+                    f"[DEBUG] Empty handler found thinking; starting async compiler (len={len(thinking_fb)})"
+                )
+                try:
+                    prefs = state.get("prefs")
+                    model_name = getattr(prefs, "model_file", "") if prefs else ""
+                    allowed_tools = sorted(
+                        list(state.get("allowed_tools_set") or CODE_FIRST_CAP)
+                    )
+
+                    self._start_compiler_request(thinking_fb, allowed_tools)
                     self._add_message(
-                        "System",
-                        "⚠️ Empty response — nudging model to reply or call a tool...",
+                        "Assistant", f"💭 Thinking: {thinking_fb[:300]}..."
                     )
-                    state["empty_retry_done"] = True
+                    self._add_message("System", "Compiling tool calls…")
+                    state["state"] = "WAITING_COMPILER"
+                    return
 
-                    # Continue to next iteration with the nudge
-                    state["iteration"] += 1
-                    if state["iteration"] >= state["max_iterations"]:
-                        self._add_message("System", "⚠️ Max iterations reached")
-                        state["state"] = "DONE"
-                        return
-                    self._start_http_request(context)
-                else:
-                    # Second time empty — stop
-                    self._add_message("System", "❌ Empty response from LLM")
+                except Exception as _e_comp_fb:
+                    print(
+                        f"[DEBUG] Failed to start compiler from empty handler: {_e_comp_fb}"
+                    )
+            if not state.get("empty_retry_done"):
+                nudge = (
+                    "No output received. If you cannot call a tool, reply with a brief text answer "
+                    "summarizing your reasoning or next steps."
+                )
+                # Add to chat history so LLM sees it on retry
+                state["active_session"].messages.add()
+                state["active_session"].messages[-1].role = "System"
+                state["active_session"].messages[-1].content = nudge
+
+                self._add_message(
+                    "System",
+                    "⚠️ Empty response — nudging model to reply or call a tool...",
+                )
+                state["empty_retry_done"] = True
+
+                # Continue to next iteration with the nudge
+                state["iteration"] += 1
+                if state["iteration"] >= state["max_iterations"]:
+                    self._add_message("System", "⚠️ Max iterations reached")
                     state["state"] = "DONE"
+                    return
+                self._start_http_request(context)
+            else:
+                # Second time empty — stop
+                self._add_message("System", "❌ Empty response from LLM")
+                state["state"] = "DONE"
             return
 
         print(f"[DEBUG] LLM Response: {reply[:200]}...")  # Debug output
@@ -1135,7 +1681,52 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
         if not tool_call:
             tool_call = self._extract_tool(reply)
+
             print(f"[DEBUG] Extracted tool from text: {tool_call}")  # Debug output
+
+            # If no structured/text tool call detected, auto-wrap python code blocks into execute_code
+            if not tool_call:
+                try:
+                    import re
+
+                    m = re.search(
+                        r"```(?:python|py)?\s*(.+?)\s*```",
+                        reply,
+                        re.DOTALL | re.IGNORECASE,
+                    )
+                    code_block = m.group(1).strip() if m else None
+
+                    if code_block and (
+                        ("import bpy" in code_block) or ("bpy." in code_block)
+                    ):
+                        # Nudge: do not call native tools inside execute_code
+                        if any(
+                            tok in code_block
+                            for tok in [
+                                "get_scene_info(",
+                                "get_object_info(",
+                                "list_collections(",
+                                "get_collection_info(",
+                                "create_collection(",
+                                "move_to_collection(",
+                                "set_collection_color(",
+                                "delete_collection(",
+                            ]
+                        ):
+                            self._add_message(
+                                "System",
+                                "Do not call tools from inside execute_code. Emit tool calls as JSON separately; I will run your Python and then you can call tools.",
+                            )
+
+                        tool_call = {
+                            "tool": "execute_code",
+                            "args": {"code": code_block},
+                        }
+                        print(
+                            "[DEBUG] Auto-wrapped python block from normal content into execute_code"
+                        )
+                except Exception as _e:
+                    print(f"[DEBUG] Code block auto-wrap failed: {_e}")
 
         if tool_call:
             # Check if we have pending JSON calls to queue
@@ -1274,8 +1865,20 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                             )
                             self._add_message("System", hint)
             except Exception as e:
-                print(f"[DEBUG] Tool execution error: {str(e)}")
-                self._add_message("Tool", f"❌ Error: {str(e)}", tool_name=tool_name)
+                err_str = str(e)
+                print(f"[DEBUG] Tool execution error: {err_str}")
+                self._add_message("Tool", f"❌ Error: {err_str}", tool_name=tool_name)
+                # Hint for Blender custom properties syntax (e.g., scene['prop'] vs scene.prop)
+                try:
+                    if ("Scene' object has no attribute" in err_str) or (
+                        "has no attribute 'solar_system_" in err_str
+                    ):
+                        self._add_message(
+                            "System",
+                            "Hint: Blender custom properties must use brackets, e.g., scene['my_prop'] = value (not scene.my_prop).",
+                        )
+                except Exception:
+                    pass
 
             # Check iteration limit
 
@@ -1441,10 +2044,20 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 messages.append(msg)
             elif role == "assistant":
                 content = it.content
-                # Do not echo chain-of-thought back to the model
-                if content and content.strip().startswith("💭 Thinking"):
-                    continue
-                messages.append({"role": "assistant", "content": content})
+                # If this is a thinking message, send it back in proper Ollama format
+                if content and content.strip().startswith("💭 Thinking:"):
+                    # Extract raw thinking content
+                    thinking_content = content.strip()[len("💭 Thinking:") :].strip()
+                    # Send in Ollama's expected format
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "thinking": thinking_content,
+                            "content": "",
+                        }
+                    )
+                else:
+                    messages.append({"role": "assistant", "content": content})
             elif role == "tool":
                 # Only include real tool results (those with a stored tool_name)
                 tname = getattr(it, "tool_name", "") if hasattr(it, "tool_name") else ""
@@ -1565,6 +2178,9 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
         if "think_override" in state and state["think_override"] is not None:
             think_param = state["think_override"]
+            # Normalize override for GPT-OSS: booleans are ignored, use 'low' instead of False
+            if base_name == "gpt-oss" and think_param is False:
+                think_param = "low"
 
         else:
             if base_name == "gpt-oss":
@@ -1587,10 +2203,22 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
                 think_param = False if think_level == "OFF" else True
 
-        # Enforce per-model flag: if disabled, do not send 'think'
-        if not think_allowed:
-            think_param = False
-        print(f"[DEBUG] Think param: {think_param}")
+        # Enforce per-model flag: if disabled, do not send 'think' (but don't clobber per-turn override)
+
+        if not think_allowed and not (
+            "think_override" in state and state["think_override"] is not None
+        ):
+            if base_name == "gpt-oss":
+                # GPT-OSS ignores booleans; reduce to 'low' instead of False
+                think_param = "low"
+            else:
+                think_param = False
+
+        print(f"[DEBUG] Model base: {base_name}")
+        print(f"[DEBUG] Pref think_level: {think_level}")
+        print(f"[DEBUG] Override think: {state.get('think_override', None)}")
+        print(f"[DEBUG] Per-model think_allowed: {think_allowed}")
+        print(f"[DEBUG] Final think param: {think_param}")
 
         # Start thread with GPU settings
         thread = threading.Thread(
@@ -1724,6 +2352,14 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
                 if isinstance(message, dict):
                     text = message.get("content", "")
+                    thinking = message.get("thinking", "")
+
+                    # Format thinking as a separate section only when we have content
+                    # If thinking-only, leave text empty so agent loop handler displays it
+                    if thinking and text:
+                        thinking_section = f"## Thinking:\n{thinking.strip()}"
+                        # Both thinking and content
+                        text = f"{thinking_section}\n\n---\n\n## Response:\n{text}"
 
                 elif isinstance(message, str):
                     text = message
@@ -1777,6 +2413,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                     return
 
             text = (text or "").strip()
+
             print(
                 f"[DEBUG] HTTP worker extracted text: {text[:100] if text else '(empty)'}..."
             )
