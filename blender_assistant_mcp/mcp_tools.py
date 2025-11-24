@@ -465,7 +465,10 @@ def register():
         selection_tools,
         sketchfab_tools,
         stock_photo_tools,
+        sketchfab_tools,
+        stock_photo_tools,
         web_tools,
+        memory_tools,
     )
 
     # Register Blender tools
@@ -487,6 +490,9 @@ def register():
     # Register Stock Photo tools (conditional; registers only if API keys present)
     if hasattr(stock_photo_tools, "register"):
         stock_photo_tools.register()
+        
+    # Register Memory tools
+    memory_tools.register_tools()
 
     # Register RAG tools
     if hasattr(rag_tools, "register"):

@@ -29,17 +29,18 @@ from . import (
     selection_tools,
     stock_photo_tools,
     ui,
+    memory_tools,
 )
 
 # Module list for registration
 _modules = [
     mcp_tools,
-    selection_tools,
     polyhaven_tools,
-    stock_photo_tools,
-    assistant,
-    ui,
     preferences,
+    selection_tools,
+    stock_photo_tools,
+    ui,
+    memory_tools,
 ]
 
 def register():

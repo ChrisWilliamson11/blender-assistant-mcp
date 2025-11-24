@@ -853,60 +853,53 @@ def _get_code_namespace():
             "assistant_sdk": _get_assistant_sdk(),
         }
 
-        # Install an importable shim module so 'import assistant_sdk' and
-        # 'from assistant_sdk.stock_photos import search' work inside execute_code.
+        # Install a robust importable shim module
         try:
             import sys
             import types
 
             sdk_obj = _CODE_NAMESPACE["assistant_sdk"]
-            # Create top-level module
-            _as_mod = types.ModuleType("assistant_sdk")
-            for _name in (
-                "polyhaven",
-                "blender",
-                "sketchfab",
-                "stock_photos",
-                "web",
-                "rag",
-            ):
-                if hasattr(sdk_obj, _name):
-                    setattr(_as_mod, _name, getattr(sdk_obj, _name))
-            # Create submodule for stock_photos with direct function proxies
-            _sp_mod = types.ModuleType("assistant_sdk.stock_photos")
-            if hasattr(sdk_obj, "stock_photos"):
-                _sp = sdk_obj.stock_photos
-                # Proxy functions if present
-                if hasattr(_sp, "search"):
+            
+            def _create_shim_module(name, obj):
+                """Recursively create a module shim for an object."""
+                mod = types.ModuleType(name)
+                
+                # Copy attributes
+                for attr in dir(obj):
+                    if not attr.startswith("_"):
+                        val = getattr(obj, attr)
+                        setattr(mod, attr, val)
+                        
+                        # If attribute is a class/object with its own attributes, 
+                        # create a submodule for it too (for 'from X.Y import Z')
+                        if hasattr(val, "__dict__") and not isinstance(val, (int, float, str, bool, list, dict, tuple)):
+                             # Check if it looks like a namespace/class we want to expose as a module
+                             pass
 
-                    def _sp_search(*args, **kwargs):
-                        return _sp.search(*args, **kwargs)
+                return mod
 
-                    _sp_mod.search = _sp_search
-                if hasattr(_sp, "download"):
-
-                    def _sp_download(*args, **kwargs):
-                        return _sp.download(*args, **kwargs)
-
-            # Register modules
+            # 1. Create top-level assistant_sdk module
+            _as_mod = _create_shim_module("assistant_sdk", sdk_obj)
             sys.modules["assistant_sdk"] = _as_mod
-            sys.modules["assistant_sdk.stock_photos"] = _sp_mod
-            # Optionally expose other submodules for import patterns
-            for _name in ("polyhaven", "blender", "sketchfab", "web", "rag"):
-                obj = getattr(sdk_obj, _name, None)
-                if obj is None:
-                    continue
-                _sub = types.ModuleType(f"assistant_sdk.{_name}")
-                try:
-                    for _attr in dir(obj):
-                        if not _attr.startswith("_"):
-                            setattr(_sub, _attr, getattr(obj, _attr))
-                except Exception:
-                    pass
-                sys.modules[f"assistant_sdk.{_name}"] = _sub
-            # Bind module into namespace for consistency with import-as usage
+            
+            # 2. Create submodules for each tool category (blender, polyhaven, etc.)
+            for category in ["blender", "polyhaven", "sketchfab", "stock_photos", "web", "rag"]:
+                if hasattr(sdk_obj, category):
+                    cat_obj = getattr(sdk_obj, category)
+                    cat_mod_name = f"assistant_sdk.{category}"
+                    
+                    # Create the submodule
+                    cat_mod = _create_shim_module(cat_mod_name, cat_obj)
+                    sys.modules[cat_mod_name] = cat_mod
+                    
+                    # Link it to the parent
+                    setattr(_as_mod, category, cat_mod)
+
+            # Bind module into namespace so 'import assistant_sdk' works inside exec()
             _CODE_NAMESPACE["assistant_sdk"] = _as_mod
-        except Exception:
+            
+        except Exception as e:
+            print(f"[Assistant] Failed to create SDK shim: {e}")
             # Best-effort; if this fails, direct namespace access still works
             pass
     return _CODE_NAMESPACE

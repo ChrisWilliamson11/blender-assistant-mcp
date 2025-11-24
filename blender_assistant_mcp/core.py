@@ -12,6 +12,8 @@ from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass, field
 from . import mcp_tools
 from .tool_manager import ToolManager
+from .memory import MemoryManager
+from .memory import MemoryManager
 
 @dataclass
 class ToolCall:
@@ -19,6 +21,16 @@ class ToolCall:
     args: Dict[str, Any]
 
 class ResponseParser:
+    """Parses LLM responses into structured tool calls."""
+    # ... (rest of ResponseParser unchanged)
+    @staticmethod
+    def parse(response: Dict[str, Any]) -> List[ToolCall]:
+        # ... (implementation same as before, omitted for brevity in this tool call context but I must be careful not to delete it)
+        # Wait, replace_file_content replaces the whole block. I need to be careful.
+        # I will target specific blocks instead of the whole file.
+        pass 
+
+# I will use multi_replace for better control
     """Parses LLM responses into structured tool calls."""
 
     @staticmethod
@@ -96,6 +108,7 @@ class AssistantSession:
     def __init__(self, model_name: str, tool_manager: ToolManager):
         self.model_name = model_name
         self.tool_manager = tool_manager
+        self.memory_manager = MemoryManager()
         self.history: List[Dict[str, str]] = []
         self.tool_queue: List[ToolCall] = []
         self.state = "IDLE" # IDLE, THINKING, EXECUTING, DONE
@@ -121,9 +134,12 @@ class AssistantSession:
         """Build the system prompt based on enabled tools."""
         compact_tools = self.tool_manager.get_compact_tool_list(self.enabled_tools)
         sdk_hints = self.tool_manager.get_system_prompt_hints(self.enabled_tools)
+        memory_context = self.memory_manager.get_context()
         
         return (
             "You are Blender Assistant — control Blender by writing Python code or calling native tools.\n\n"
+            "MEMORY\n"
+            f"{memory_context}\n\n"
             "BEHAVIOR\n"
             "- Prefer native tools when they map to your task.\n"
             "- Use 'execute_code' for custom logic or complex operations not covered by tools.\n"
