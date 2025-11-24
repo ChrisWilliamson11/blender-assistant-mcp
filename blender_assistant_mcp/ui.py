@@ -6,7 +6,23 @@ import bpy
 _expanded_code_blocks = set()
 
 # Global set to track which JSON hierarchy nodes are expanded (message_idx, path)
+# Global set to track which JSON hierarchy nodes are expanded (message_idx, path)
 _expanded_json_nodes = set()
+
+
+class AssistantChatMessage(bpy.types.PropertyGroup):
+    """A single message in the chat history"""
+    role: bpy.props.StringProperty(name="Role", default="User")
+    content: bpy.props.StringProperty(name="Content", default="")
+    image_data: bpy.props.StringProperty(name="Image Data", default="")  # Base64 encoded
+    tool_name: bpy.props.StringProperty(name="Tool Name", default="")
+
+
+class AssistantChatSession(bpy.types.PropertyGroup):
+    """A chat session containing multiple messages"""
+    name: bpy.props.StringProperty(name="Name", default="Chat")
+    messages: bpy.props.CollectionProperty(type=AssistantChatMessage)
+    created_at: bpy.props.StringProperty(name="Created At", default="")
 
 
 class ASSISTANT_PT_panel(bpy.types.Panel):
@@ -575,6 +591,64 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
         if item.image_data:
             content_row.label(text="", icon="IMAGE_DATA")
         content_row.label(text=item.content)
+
+
+class ASSISTANT_OT_new_chat(bpy.types.Operator):
+    """Create a new chat session"""
+    bl_idname = "assistant.new_chat"
+    bl_label = "New Chat"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        wm = context.window_manager
+        new_session = wm.assistant_chat_sessions.add()
+        new_session.name = f"Chat {len(wm.assistant_chat_sessions)}"
+        import datetime
+        new_session.created_at = datetime.datetime.now().isoformat()
+        
+        # Switch to new chat
+        wm.assistant_active_chat_index = len(wm.assistant_chat_sessions) - 1
+        return {"FINISHED"}
+
+
+class ASSISTANT_OT_delete_chat(bpy.types.Operator):
+    """Delete the active chat session"""
+    bl_idname = "assistant.delete_chat"
+    bl_label = "Delete Chat"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        wm = context.window_manager
+        idx = wm.assistant_active_chat_index
+        if 0 <= idx < len(wm.assistant_chat_sessions):
+            wm.assistant_chat_sessions.remove(idx)
+            # Adjust index
+            if wm.assistant_active_chat_index >= len(wm.assistant_chat_sessions):
+                wm.assistant_active_chat_index = len(wm.assistant_chat_sessions) - 1
+        return {"FINISHED"}
+
+
+class ASSISTANT_OT_rename_chat(bpy.types.Operator):
+    """Rename the active chat session"""
+    bl_idname = "assistant.rename_chat"
+    bl_label = "Rename Chat"
+    bl_options = {"REGISTER"}
+    
+    new_name: bpy.props.StringProperty(name="New Name")
+
+    def invoke(self, context, event):
+        wm = context.window_manager
+        idx = wm.assistant_active_chat_index
+        if 0 <= idx < len(wm.assistant_chat_sessions):
+            self.new_name = wm.assistant_chat_sessions[idx].name
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        wm = context.window_manager
+        idx = wm.assistant_active_chat_index
+        if 0 <= idx < len(wm.assistant_chat_sessions):
+            wm.assistant_chat_sessions[idx].name = self.new_name
+        return {"FINISHED"}
 
 
 class ASSISTANT_OT_toggle_code_block(bpy.types.Operator):
@@ -1253,14 +1327,69 @@ def _update_model_status_cache():
     return 5.0  # Check again in 5 seconds
 
 
+def update_message_selection(self, context):
+    """Callback when message selection changes"""
+    # Trigger redraw of the panel to show details of selected message
+    for area in context.screen.areas:
+        if area.type == "VIEW_3D":
+            area.tag_redraw()
+
+
+def get_chat_sessions_enum(self, context):
+    """Callback to populate chat session dropdown"""
+    items = []
+    wm = context.window_manager
+    if not wm.assistant_chat_sessions:
+        return []
+    
+    for i, session in enumerate(wm.assistant_chat_sessions):
+        name = session.name if session.name else f"Chat {i+1}"
+        items.append((str(i), name, f"Switch to {name}"))
+    return items
+
+
+def update_active_chat(self, context):
+    """Callback when active chat changes"""
+    wm = context.window_manager
+    try:
+        idx = int(wm.assistant_active_chat_enum)
+        wm.assistant_active_chat_index = idx
+        # Scroll to bottom of new chat
+        if 0 <= idx < len(wm.assistant_chat_sessions):
+            wm.assistant_chat_message_index = len(wm.assistant_chat_sessions[idx].messages) - 1
+    except ValueError:
+        pass
+
+
 def register():
     # Register window manager properties
-    bpy.types.WindowManager.assistant_chat_message_index = bpy.props.IntProperty(
+    bpy.utils.register_class(AssistantChatMessage)
+    bpy.utils.register_class(AssistantChatSession)
+    
+    bpy.types.WindowManager.assistant_chat_sessions = bpy.props.CollectionProperty(
+        type=AssistantChatSession
+    )
+    bpy.types.WindowManager.assistant_active_chat_index = bpy.props.IntProperty(
         default=-1, update=update_message_selection
+    )
+    bpy.types.WindowManager.assistant_active_chat_enum = bpy.props.EnumProperty(
+        items=get_chat_sessions_enum,
+        name="Chat Session",
+        description="Select active chat session",
+        update=update_active_chat
+    )
+    bpy.types.WindowManager.assistant_message = bpy.props.StringProperty(
+        name="Message", default=""
+    )
+    bpy.types.WindowManager.assistant_pending_image = bpy.props.StringProperty(
+        name="Pending Image", default=""
     )
 
     # Register classes
     bpy.utils.register_class(ASSISTANT_UL_chat)
+    bpy.utils.register_class(ASSISTANT_OT_new_chat)
+    bpy.utils.register_class(ASSISTANT_OT_delete_chat)
+    bpy.utils.register_class(ASSISTANT_OT_rename_chat)
     bpy.utils.register_class(ASSISTANT_OT_toggle_code_block)
     bpy.utils.register_class(ASSISTANT_OT_toggle_json_node)
     bpy.utils.register_class(ASSISTANT_OT_copy_code_block)

@@ -49,6 +49,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
     _thread = None
     _response = None
     _error = None
+    _is_running = False
 
     def _add_message(self, role, content, tool_name=None):
         """Add message to UI chat history."""
@@ -108,11 +109,16 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         global _stop_requested
         _stop_requested = False
         
+        # Set running flag
+        ASSISTANT_OT_send._is_running = True
+        
         session = get_session(context)
         
         # Ensure watcher is initialized
         if not session.scene_watcher._initialized:
             session.scene_watcher.capture_state()
+            
+        # Add user message
         if self.message:
             session.add_message("user", self.message)
             self._add_message("User", self.message)
@@ -139,7 +145,6 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         )
         self._thread.start()
         session.state = "THINKING"
-        self._add_message("System", "Thinking...")
 
     def modal(self, context, event):
         global _stop_requested
