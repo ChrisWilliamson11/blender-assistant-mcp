@@ -41,6 +41,7 @@ _modules = [
     stock_photo_tools,
     ui,
     memory_tools,
+    assistant,
 ]
 
 def register():

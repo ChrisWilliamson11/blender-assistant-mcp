@@ -1431,6 +1431,9 @@ def register():
     bpy.types.WindowManager.assistant_pending_image = bpy.props.StringProperty(
         name="Pending Image", default=""
     )
+    bpy.types.WindowManager.assistant_chat_message_index = bpy.props.IntProperty(
+        default=-1, update=update_message_selection
+    )
 
     # Register classes
     bpy.utils.register_class(ASSISTANT_UL_chat)
