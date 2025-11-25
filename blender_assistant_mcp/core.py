@@ -113,11 +113,13 @@ class AssistantSession:
         # Load enabled tools
         self.enabled_tools = self.tool_manager.get_enabled_tools()
 
-    def add_message(self, role: str, content: str, name: str = None):
+    def add_message(self, role: str, content: str, name: str = None, images: List[str] = None):
         """Add a message to history."""
         msg = {"role": role, "content": content}
         if name:
             msg["name"] = name
+        if images:
+            msg["images"] = images
         self.history.append(msg)
         
         # Prune history if too long (simple sliding window)

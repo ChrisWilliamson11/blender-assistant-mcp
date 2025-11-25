@@ -62,7 +62,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
     _error = None
     _is_running = False
 
-    def _add_message(self, role, content, tool_name=None):
+    def _add_message(self, role, content, tool_name=None, images=None):
         """Add message to UI chat history."""
         wm = bpy.context.window_manager
         
@@ -82,6 +82,9 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         item = active_session.messages.add()
         item.role = role
         item.content = content
+        if images and len(images) > 0:
+            item.image_data = images[0] # UI only supports showing one image for now
+            
         if tool_name:
             # Store tool name in the message item if property exists, 
             # otherwise it's just part of the history.
@@ -131,10 +134,16 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             self.message = wm.assistant_message
             wm.assistant_message = "" # Clear input
             
+        # Check for pending image
+        images = []
+        if wm.assistant_pending_image:
+            images.append(wm.assistant_pending_image)
+            wm.assistant_pending_image = "" # Clear pending image
+            
         # Add user message
         if self.message:
-            session.add_message("user", self.message)
-            self._add_message("User", self.message)
+            session.add_message("user", self.message, images=images)
+            self._add_message("User", self.message, images=images)
         else:
             # No message to send
             self.report({"WARNING"}, "Please enter a message")
