@@ -159,7 +159,7 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
         # Send button - disabled when running
         send_row = row.row(align=True)
         send_row.enabled = not is_running
-        send_row.operator("assistant.send", text="Send", icon="PLAY")
+        send_row.operator("assistant.submit_message", text="Send", icon="PLAY")
 
         # Continue button - quickly ask the model to continue
         cont_row = row.row(align=True)

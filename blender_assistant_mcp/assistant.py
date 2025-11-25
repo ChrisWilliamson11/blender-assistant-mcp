@@ -48,6 +48,29 @@ class ASSISTANT_OT_continue_chat(bpy.types.Operator):
         bpy.ops.assistant.send(message="Please continue.")
         return {"FINISHED"}
 
+class ASSISTANT_OT_submit_message(bpy.types.Operator):
+    """Submit message from UI to assistant"""
+    bl_idname = "assistant.submit_message"
+    bl_label = "Submit Message"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        wm = context.window_manager
+        msg = wm.assistant_message
+        img = wm.assistant_pending_image
+        
+        if not msg and not img:
+            self.report({"WARNING"}, "Please enter a message")
+            return {"CANCELLED"}
+            
+        # Clear UI
+        wm.assistant_message = ""
+        wm.assistant_pending_image = ""
+        
+        # Call worker
+        bpy.ops.assistant.send(message=msg, image_data=img)
+        return {"FINISHED"}
+
 class ASSISTANT_OT_send(bpy.types.Operator):
     """Send message to assistant (runs in background, UI stays responsive)"""
     bl_idname = "assistant.send"
@@ -55,6 +78,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
     bl_options = {"REGISTER"}
 
     message: bpy.props.StringProperty(name="Message", default="")
+    image_data: bpy.props.StringProperty(name="Image Data", default="")
     
     _timer = None
     _thread = None
@@ -128,25 +152,19 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         if not session.scene_watcher._initialized:
             session.scene_watcher.capture_state()
             
-        # Check for message in WindowManager if not provided in operator
-        wm = context.window_manager
-        if not self.message and wm.assistant_message:
-            self.message = wm.assistant_message
-            wm.assistant_message = "" # Clear input
-            
-        # Check for pending image
+        # Prepare images list
         images = []
-        if wm.assistant_pending_image:
-            images.append(wm.assistant_pending_image)
-            wm.assistant_pending_image = "" # Clear pending image
+        if self.image_data:
+            images.append(self.image_data)
             
         # Add user message
-        if self.message:
+        if self.message or images:
+            # Note: We pass message even if empty if there's an image
             session.add_message("user", self.message, images=images)
             self._add_message("User", self.message, images=images)
         else:
-            # No message to send
-            self.report({"WARNING"}, "Please enter a message")
+            # Should not happen if called via submit_message or continue_chat
+            self.report({"WARNING"}, "No message or image to send")
             ASSISTANT_OT_send._is_running = False
             return {"CANCELLED"}
             
@@ -256,9 +274,11 @@ def get_schema_tools():
 def register():
     bpy.utils.register_class(ASSISTANT_OT_stop)
     bpy.utils.register_class(ASSISTANT_OT_continue_chat)
+    bpy.utils.register_class(ASSISTANT_OT_submit_message)
     bpy.utils.register_class(ASSISTANT_OT_send)
 
 def unregister():
     bpy.utils.unregister_class(ASSISTANT_OT_stop)
     bpy.utils.unregister_class(ASSISTANT_OT_continue_chat)
+    bpy.utils.unregister_class(ASSISTANT_OT_submit_message)
     bpy.utils.unregister_class(ASSISTANT_OT_send)
