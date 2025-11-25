@@ -83,13 +83,9 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         item.role = role
         item.content = content
         if tool_name:
-            # If the UI item has a tool_name property (it might not, checking ui.py would confirm, 
-            # but standard practice is to put it in content or a specific prop if defined.
-            # Looking at ui.py, ASSISTANT_UL_chat draws 'item.role' and 'item.content'.
-            # It doesn't seem to explicitly use tool_name for drawing, but let's check if the property exists.
-            # Since I can't see the property definition in ui.py (it was likely in a class I didn't see fully),
-            # I'll stick to role/content which are used in draw_item.
-            # I'll prepend tool name to content for clarity if needed, or just rely on role="Tool".
+            # Store tool name in the message item if property exists, 
+            # otherwise it's just part of the history.
+            # For now, we rely on the role being "Tool" and content being the result.
             pass
             
         # Scroll to bottom
@@ -221,9 +217,21 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         return {"PASS_THROUGH"}
 
     def _finish(self, context):
+        ASSISTANT_OT_send._is_running = False
         if self._timer:
             context.window_manager.event_timer_remove(self._timer)
         return {"FINISHED"}
+
+def get_schema_tools():
+    """Get the list of enabled tools for debug/UI purposes."""
+    # Create a temporary session or tool manager to get default tools
+    # Ideally we should get this from the active session if it exists
+    if _session:
+        return list(_session.enabled_tools)
+    else:
+        # Fallback to defaults
+        tm = ToolManager()
+        return list(tm.default_tools)
 
 def register():
     bpy.utils.register_class(ASSISTANT_OT_stop)

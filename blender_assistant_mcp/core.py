@@ -22,13 +22,6 @@ class ToolCall:
 
 class ResponseParser:
     """Parses LLM responses into structured tool calls."""
-    # ... (rest of ResponseParser unchanged)
-    @staticmethod
-    def parse(response: Dict[str, Any]) -> List[ToolCall]:
-        # ... (implementation same as before, omitted for brevity in this tool call context but I must be careful not to delete it)
-        # Wait, replace_file_content replaces the whole block. I need to be careful.
-        # I will target specific blocks instead of the whole file.
-        pass 
 
 # I will use multi_replace for better control
     """Parses LLM responses into structured tool calls."""
