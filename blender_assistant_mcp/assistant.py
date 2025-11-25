@@ -125,10 +125,21 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         if not session.scene_watcher._initialized:
             session.scene_watcher.capture_state()
             
+        # Check for message in WindowManager if not provided in operator
+        wm = context.window_manager
+        if not self.message and wm.assistant_message:
+            self.message = wm.assistant_message
+            wm.assistant_message = "" # Clear input
+            
         # Add user message
         if self.message:
             session.add_message("user", self.message)
             self._add_message("User", self.message)
+        else:
+            # No message to send
+            self.report({"WARNING"}, "Please enter a message")
+            ASSISTANT_OT_send._is_running = False
+            return {"CANCELLED"}
             
         # Start the loop
         self._start_step(context, session)
