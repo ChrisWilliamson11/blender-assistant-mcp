@@ -565,17 +565,20 @@ class _AssistantSDK:
         assistant_help('<namespace>') to fetch exact usage before coding.
         """
         return (
-            "assistant_sdk quick reference\n"
-            "- blender.* — scene/objects/collections/selection; use assistant_help('assistant_sdk.blender') for signatures\n"
+            "assistant_sdk quick reference; use assistant_help('assistant_sdk.<namespace>') for signatures\n"
+            "- blender.* — scene/objects/collections/selection\n"
             "- polyhaven.search/download — PolyHaven assets (HDRIs, textures, models)\n"
-            "- stock_photos.search/download — Pexels/Unsplash (API keys); download(..., apply_as_texture=False)\n"
+            "- stock_photos.search/download — Pexels/Unsplash images\n"
             "- sketchfab.login/search/download — Sketchfab models\n"
-            "- web.search/fetch_page/extract_images/download_image — Web tools\n"
-            "- rag.query/get_stats — Blender docs RAG (API/Manual); prefer_source='API'|'Manual'\n"
+            "- web.search/fetch_page/extract_images/download_image — general web tools\n"
+            "- rag.query/get_stats — Blender docs RAG (API/Manual)\n"
             "- memory.remember_fact/remember_preference/remember_learning/search — Store long-term knowledge\n"
         )
 
-    class _Memory:
+    class _Polyhaven:
+        def __init__(self, mcp):
+            self._mcp = mcp
+
         def search(
             self, asset_type: str | None = None, query: str = "", limit: int = 10
         ):
@@ -1428,6 +1431,26 @@ class _AssistantSDK:
         def get_stats(self):
             """Get RAG subsystem statistics (enabled, document count, db path)."""
             return mcp_tools.execute_tool("rag_get_stats", {})
+
+    class _Memory:
+        def __init__(self, mcp):
+            self._mcp = mcp
+
+        def remember_fact(self, key: str, value: str):
+            """Store a factual memory (e.g., 'user likes blue')."""
+            return get_memory_manager().remember_fact(key, value)
+
+        def remember_preference(self, key: str, value: str):
+            """Store a user preference (e.g., 'default_material: metal')."""
+            return get_memory_manager().remember_preference(key, value)
+
+        def remember_learning(self, key: str, value: str):
+            """Store a learning/insight (e.g., 'UV unwrap before texturing')."""
+            return get_memory_manager().remember_learning(key, value)
+
+        def search(self, query: str, limit: int = 10):
+            """Search memory for relevant entries."""
+            return get_memory_manager().search_memory(query, limit)
 
 
 def _get_assistant_sdk():

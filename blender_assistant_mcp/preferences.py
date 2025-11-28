@@ -1768,12 +1768,6 @@ class AssistantPreferences(bpy.types.AddonPreferences):
 
         settings_col.prop(self, "thinking_level")
 
-        # lean mode removed: curated minimal tool set is always used with code-first
-
-        # Automatic scene snapshot to keep context fresh
-        settings_col.prop(self, "auto_scene_snapshot")
-        if self.auto_scene_snapshot:
-            settings_col.prop(self, "snapshot_max_objects")
 
         # Planning exploration controls
         settings_col.prop(self, "planning_exploration")
@@ -2078,7 +2072,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             icon="TRIA_DOWN" if self.show_section_tools else "TRIA_RIGHT",
             emboss=False,
         )
-        row.label(text="Tools Configuration", icon="TOOLS")
+        row.label(text="Tools Configuration", icon="TOOL_SETTINGS")
         if self.show_section_tools:
             self._draw_tools_config(layout)
 
