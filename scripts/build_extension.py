@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
@@ -186,6 +187,7 @@ def build_zip(output_file: Path, base_dir: Path, dry_run: bool = False) -> int:
     print(f"  File: {output_file}")
     print(f"  Files: {added}")
     print(f"  Size: {size_mb:.2f} MB")
+    print(f"  Time: {datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}")
     print("\nTo install:")
     print("  1. Open Blender 4.2+")
     print("  2. Edit → Preferences → Get Extensions")

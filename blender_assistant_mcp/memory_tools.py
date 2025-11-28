@@ -34,7 +34,7 @@ def remember_fact(fact: str, category: str = "general") -> Dict[str, Any]:
     mem.remember_fact(fact, category)
     return {"success": True, "message": f"Remembered fact: {fact}"}
 
-def register_tools():
+def register():
     """Register memory tools."""
     from . import mcp_tools
     
@@ -67,3 +67,44 @@ def register_tools():
         },
         category="Memory"
     )
+
+    mcp_tools.register_tool(
+        "remember_learning",
+        remember_learning,
+        "Record a technical learning, pitfall, or version quirk.",
+        {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Topic (e.g., 'Blender 4.0', 'BSDF')"},
+                "insight": {"type": "string", "description": "The technical insight or pitfall to avoid"}
+            },
+            "required": ["topic", "insight"]
+        },
+        category="Memory"
+    )
+
+    mcp_tools.register_tool(
+        "search_memory",
+        search_memory,
+        "Semantically search memory for relevant facts/learnings.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"}
+            },
+            "required": ["query"]
+        },
+        category="Memory"
+    )
+
+def remember_learning(topic: str, insight: str) -> Dict[str, Any]:
+    """Record a technical learning."""
+    mem = get_memory_manager()
+    mem.remember_learning(topic, insight)
+    return {"success": True, "message": f"Recorded learning on [{topic}]"}
+
+def search_memory(query: str) -> Dict[str, Any]:
+    """Search memory."""
+    mem = get_memory_manager()
+    results = mem.search_memory(query)
+    return {"results": results}

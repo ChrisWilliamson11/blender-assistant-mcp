@@ -414,6 +414,7 @@ def get_tools_list() -> List[Dict[str, Any]]:
             "name": name,
             "description": tool["description"],
             "inputSchema": tool["inputSchema"],
+            "category": tool.get("category", "Other"),
         }
         for name, tool in _TOOLS.items()
     ]
@@ -456,49 +457,9 @@ def clear_tools():
 # Module-level functions for compatibility
 def register():
     """Register all MCP tools (called from __init__.py)."""
-    # Import and register tools from other modules
-
-    from . import (
-        blender_tools,
-        polyhaven_tools,
-        rag_tools,
-        selection_tools,
-        sketchfab_tools,
-        stock_photo_tools,
-        sketchfab_tools,
-        stock_photo_tools,
-        web_tools,
-        memory_tools,
-    )
-
-    # Register Blender tools
-    blender_tools.register_tools()
-
-    # Register selection tools
-    selection_tools.register_tools()
-
-    # Register PolyHaven tools
-    polyhaven_tools.register_tools()
-
-    # Register web tools
-    web_tools.register_tools()
-
-    # Register Sketchfab tools
-
-    sketchfab_tools.register_tools()
-
-    # Register Stock Photo tools (conditional; registers only if API keys present)
-    if hasattr(stock_photo_tools, "register"):
-        stock_photo_tools.register()
-        
-    # Register Memory tools
-    memory_tools.register_tools()
-
-    # Register RAG tools
-    if hasattr(rag_tools, "register"):
-        rag_tools.register()
-
-    print(f"[MCP] Registered {len(_TOOLS)} tools total")
+    # Note: Other modules register their own tools via their own register() functions
+    # which are called by __init__.py. We don't need to do it here.
+    pass
 
 
 def unregister():

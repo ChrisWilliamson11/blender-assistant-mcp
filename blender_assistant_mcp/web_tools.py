@@ -36,6 +36,7 @@ def web_search(query: str, num_results: int = 5) -> dict:
             response = client.get(search_url, headers=headers, timeout=15.0)
             response.raise_for_status()
             html = response.text
+            print(f"[Web] Fetched {len(html)} chars from DDG")
 
         results = []
         meta_fetches = 0
@@ -47,6 +48,7 @@ def web_search(query: str, num_results: int = 5) -> dict:
             html,
             re.DOTALL | re.IGNORECASE,
         )
+        print(f"[Web] Found {len(result_blocks)} result blocks")
 
         for block in result_blocks[:num_results]:
             # Extract title and URL from <a class="result__a" href="...">title</a>
@@ -669,7 +671,7 @@ def extract_image_urls(url: str, min_width: int = 400, max_images: int = 10) -> 
         return {"error": f"Failed to extract images: {str(e)}"}
 
 
-def register_tools():
+def register():
     """Register all web tools with the MCP registry."""
 
     mcp_tools.register_tool(

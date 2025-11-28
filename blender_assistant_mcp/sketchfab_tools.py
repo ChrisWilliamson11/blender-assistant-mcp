@@ -255,7 +255,7 @@ def sketchfab_download_model(uid: str, import_into_scene: bool = True, name_hint
         return {"error": f"Download failed: {str(e)}"}
 
 
-def register_tools():
+def register():
     """Register Sketchfab tools in the MCP registry."""
     mcp_tools.register_tool(
         "sketchfab_login",

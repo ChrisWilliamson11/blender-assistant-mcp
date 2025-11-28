@@ -23,6 +23,7 @@ class AssistantChatSession(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(name="Name", default="Chat")
     messages: bpy.props.CollectionProperty(type=AssistantChatMessage)
     created_at: bpy.props.StringProperty(name="Created At", default="")
+    session_id: bpy.props.StringProperty(name="Session ID", default="")
 
 
 class ASSISTANT_PT_panel(bpy.types.Panel):
@@ -99,7 +100,6 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
 
             # Generation settings
             box.label(text="Generation Settings:", icon="SETTINGS")
-            box.prop(prefs, "max_iterations", text="Max Steps")
             box.prop(prefs, "use_rag", text="Enable Documentation")
             if prefs.use_rag:
                 box.prop(prefs, "rag_num_results", text="Results")
@@ -579,6 +579,10 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
         elif item.role == "Tool":
             # Tool messages - darkest
             row.emboss = "NORMAL"
+        elif item.role == "Thinking":
+            # Thinking - italic/subtle
+            row.emboss = "NONE"
+            row.enabled = False
         else:
             # System or other - default
             row.emboss = "NONE_OR_STATUS"
@@ -603,8 +607,11 @@ class ASSISTANT_OT_new_chat(bpy.types.Operator):
         wm = context.window_manager
         new_session = wm.assistant_chat_sessions.add()
         new_session.name = f"Chat {len(wm.assistant_chat_sessions)}"
+        
         import datetime
+        import uuid
         new_session.created_at = datetime.datetime.now().isoformat()
+        new_session.session_id = str(uuid.uuid4())
         
         # Switch to new chat
         wm.assistant_active_chat_index = len(wm.assistant_chat_sessions) - 1
@@ -621,7 +628,16 @@ class ASSISTANT_OT_delete_chat(bpy.types.Operator):
         wm = context.window_manager
         idx = wm.assistant_active_chat_index
         if 0 <= idx < len(wm.assistant_chat_sessions):
+            # Get session ID before deleting
+            session_id = wm.assistant_chat_sessions[idx].session_id
+            
+            # Remove from UI
             wm.assistant_chat_sessions.remove(idx)
+            
+            # Remove from backend
+            from . import assistant
+            assistant.reset_session(session_id)
+            
             # Adjust index
             if wm.assistant_active_chat_index >= len(wm.assistant_chat_sessions):
                 wm.assistant_active_chat_index = len(wm.assistant_chat_sessions) - 1

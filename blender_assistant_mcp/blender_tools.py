@@ -11,6 +11,15 @@ import typing
 import bpy
 
 from . import mcp_tools
+from .memory import MemoryManager
+
+_memory_manager = None
+
+def get_memory_manager():
+    global _memory_manager
+    if _memory_manager is None:
+        _memory_manager = MemoryManager()
+    return _memory_manager
 
 
 def get_scene_info(
@@ -385,442 +394,61 @@ def get_object_info(name: str) -> dict:
     if not obj:
         return {"error": f"Object not found: {name}"}
 
-    mats = (
-        [m.name for m in obj.data.materials]
-        if getattr(obj.data, "materials", None)
-        else []
-    )
-    return {
+    info = {
         "name": obj.name,
         "type": obj.type,
-        "materials": mats,
-        "location": list(obj.location),
-        "rotation_euler": list(obj.rotation_euler),
-        "scale": list(obj.scale),
+        "visible": not obj.hide_viewport,
+        "render": not obj.hide_render,
+        "location": [round(v, 4) for v in obj.location],
+        "rotation_euler": [round(v, 4) for v in obj.rotation_euler],
+        "scale": [round(v, 4) for v in obj.scale],
+        "dimensions": [round(v, 4) for v in obj.dimensions],
+        "parent": obj.parent.name if obj.parent else None,
+        "collections": [c.name for c in obj.users_collection],
     }
 
+    # Data block info
+    if obj.data:
+        info["data"] = {"name": obj.data.name}
+        
+        # Mesh specific
+        if obj.type == 'MESH':
+            mesh = obj.data
+            info["data"]["vertices"] = len(mesh.vertices)
+            info["data"]["polygons"] = len(mesh.polygons)
+            info["data"]["shape_keys"] = [k.name for k in mesh.shape_keys.key_blocks] if mesh.shape_keys else []
+            
+            # Vertex Groups
+            info["vertex_groups"] = [vg.name for vg in obj.vertex_groups]
 
-def create_object(
-    type: str = "CUBE",
-    name: str = None,
-    location: list = None,
-    rotation: list = None,
-    scale: list = None,
-    text: str = None,
-) -> dict:
-    """Create an object (mesh primitive, camera, light, text, curve, etc.) with optional parameters."""
-    obj_type = type.upper()
+    # Materials
+    info["materials"] = []
+    for slot in obj.material_slots:
+        mat_info = {"slot": slot.name, "material": slot.material.name if slot.material else None}
+        info["materials"].append(mat_info)
 
-    # Create the appropriate object type
-    # MESH PRIMITIVES
-    if obj_type == "CUBE":
-        bpy.ops.mesh.primitive_cube_add()
-    elif obj_type == "SPHERE":
-        bpy.ops.mesh.primitive_uv_sphere_add()
-    elif obj_type == "CYLINDER":
-        bpy.ops.mesh.primitive_cylinder_add()
-    elif obj_type == "CONE":
-        bpy.ops.mesh.primitive_cone_add()
-    elif obj_type == "TORUS":
-        bpy.ops.mesh.primitive_torus_add()
-    elif obj_type == "PLANE":
-        bpy.ops.mesh.primitive_plane_add()
-    elif obj_type == "MONKEY":
-        bpy.ops.mesh.primitive_monkey_add()
-    elif obj_type == "ICOSPHERE":
-        bpy.ops.mesh.primitive_ico_sphere_add()
+    # Modifiers
+    info["modifiers"] = []
+    for mod in obj.modifiers:
+        info["modifiers"].append({
+            "name": mod.name,
+            "type": mod.type,
+            "enabled": mod.show_viewport
+        })
 
-    # CAMERAS
-    elif obj_type == "CAMERA":
-        bpy.ops.object.camera_add()
+    # Constraints
+    info["constraints"] = []
+    for const in obj.constraints:
+        info["constraints"].append({
+            "name": const.name,
+            "type": const.type,
+            "enabled": const.enabled
+        })
+        
+    # Animation
+        info["action"] = obj.animation_data.action.name
 
-    # LIGHTS
-    elif obj_type == "LIGHT" or obj_type == "POINT_LIGHT":
-        bpy.ops.object.light_add(type="POINT")
-    elif obj_type == "SUN" or obj_type == "SUN_LIGHT":
-        bpy.ops.object.light_add(type="SUN")
-    elif obj_type == "SPOT" or obj_type == "SPOT_LIGHT":
-        bpy.ops.object.light_add(type="SPOT")
-    elif obj_type == "AREA" or obj_type == "AREA_LIGHT":
-        bpy.ops.object.light_add(type="AREA")
-
-    # TEXT
-    elif obj_type == "TEXT":
-        bpy.ops.object.text_add()
-        obj = bpy.context.active_object
-        if text:
-            obj.data.body = text
-
-    # CURVES
-    elif obj_type == "BEZIER_CURVE" or obj_type == "CURVE":
-        bpy.ops.curve.primitive_bezier_curve_add()
-    elif obj_type == "BEZIER_CIRCLE":
-        bpy.ops.curve.primitive_bezier_circle_add()
-    elif obj_type == "NURBS_CURVE":
-        bpy.ops.curve.primitive_nurbs_curve_add()
-    elif obj_type == "NURBS_CIRCLE":
-        bpy.ops.curve.primitive_nurbs_circle_add()
-    elif obj_type == "PATH":
-        bpy.ops.curve.primitive_nurbs_path_add()
-
-    # EMPTIES
-    elif obj_type == "EMPTY":
-        bpy.ops.object.empty_add(type="PLAIN_AXES")
-    elif obj_type == "EMPTY_ARROWS":
-        bpy.ops.object.empty_add(type="ARROWS")
-    elif obj_type == "EMPTY_CUBE":
-        bpy.ops.object.empty_add(type="CUBE")
-    elif obj_type == "EMPTY_SPHERE":
-        bpy.ops.object.empty_add(type="SPHERE")
-
-    else:
-        supported = [
-            "CUBE",
-            "SPHERE",
-            "CYLINDER",
-            "CONE",
-            "TORUS",
-            "PLANE",
-            "MONKEY",
-            "ICOSPHERE",
-            "CAMERA",
-            "LIGHT",
-            "SUN",
-            "SPOT",
-            "AREA",
-            "TEXT",
-            "CURVE",
-            "BEZIER_CIRCLE",
-            "NURBS_CURVE",
-            "NURBS_CIRCLE",
-            "PATH",
-            "EMPTY",
-            "EMPTY_ARROWS",
-            "EMPTY_CUBE",
-            "EMPTY_SPHERE",
-        ]
-        return {
-            "error": f"Unsupported type: {obj_type}. Supported: {', '.join(supported)}"
-        }
-
-    try:
-        obj = bpy.context.active_object
-
-        # Set name if provided
-        if name:
-            obj.name = name
-
-        # Apply transforms if provided
-        if location:
-            obj.location = location
-        if rotation:
-            obj.rotation_euler = rotation
-        if scale:
-            obj.scale = scale
-
-        return {"created": obj.name, "type": obj.type, "name": obj.name}
-    except Exception as e:
-        return {"error": f"Failed to configure created object: {str(e)}"}
-
-
-def modify_object(
-    name: str = None,
-    location: list = None,
-    rotation: list = None,
-    scale: list = None,
-    visible: bool = None,
-    objects: list = None,
-) -> dict:
-    """Modify one or more object properties.
-
-    Args:
-        name: Single object name (use this OR objects, not both)
-        location: Location [x, y, z] for single object
-        rotation: Rotation [x, y, z] for single object
-        scale: Scale [x, y, z] for single object
-        visible: Visibility for single object
-        objects: List of dicts with 'name' and optional transform properties for batch modification
-                Example: [{"name": "Cube", "location": [0,0,1]}, {"name": "Sphere", "scale": [2,2,2]}]
-
-    Returns:
-        Dictionary with modification result(s)
-    """
-    # Batch mode: modify multiple objects
-    if objects:
-        results = []
-        modified = []
-        errors = []
-
-        for obj_spec in objects:
-            obj_name = obj_spec.get("name")
-            if not obj_name:
-                errors.append({"error": "Object spec missing 'name'", "spec": obj_spec})
-                continue
-
-            obj = bpy.data.objects.get(obj_name)
-            if not obj:
-                errors.append({"name": obj_name, "error": "Object not found"})
-                continue
-
-            # Apply transforms
-            if "location" in obj_spec and obj_spec["location"] is not None:
-                obj.location = obj_spec["location"]
-            if "rotation" in obj_spec and obj_spec["rotation"] is not None:
-                obj.rotation_euler = obj_spec["rotation"]
-            if "scale" in obj_spec and obj_spec["scale"] is not None:
-                obj.scale = obj_spec["scale"]
-            if "visible" in obj_spec and obj_spec["visible"] is not None:
-                obj.hide_viewport = not obj_spec["visible"]
-                obj.hide_render = not obj_spec["visible"]
-
-            modified.append(obj_name)
-            results.append({"name": obj_name, "modified": True})
-
-        return {
-            "modified": modified,
-            "count": len(modified),
-            "results": results,
-            "errors": errors if errors else None,
-            "message": f"Modified {len(modified)} object(s)"
-            + (f", {len(errors)} failed" if errors else ""),
-        }
-
-    # Single mode: modify one object
-    if not name:
-        return {"error": "Must provide 'name' or 'objects' parameter"}
-
-    obj = bpy.data.objects.get(name)
-    if not obj:
-        return {"error": f"Object not found: {name}"}
-
-    if location is not None:
-        obj.location = location
-    if rotation is not None:
-        obj.rotation_euler = rotation
-    if scale is not None:
-        obj.scale = scale
-    if visible is not None:
-        obj.hide_viewport = not visible
-        obj.hide_render = not visible
-
-    return {"modified": obj.name, "name": obj.name}
-
-
-def delete_object(name: str = None, names: list = None) -> dict:
-    """Delete one or more objects from the scene.
-
-    Args:
-        name: Single object name to delete
-        names: List of object names to delete (batch mode)
-
-    Returns:
-        Dictionary with deletion result(s)
-    """
-    # Batch mode
-    if names:
-        deleted = []
-        not_found = []
-
-        for obj_name in names:
-            obj = bpy.data.objects.get(obj_name)
-            if obj:
-                bpy.data.objects.remove(obj, do_unlink=True)
-                deleted.append(obj_name)
-            else:
-                not_found.append(obj_name)
-
-        return {
-            "deleted": deleted,
-            "count": len(deleted),
-            "not_found": not_found if not_found else None,
-            "message": f"Deleted {len(deleted)} object(s)"
-            + (f", {len(not_found)} not found" if not_found else ""),
-        }
-
-    # Single mode
-    if not name:
-        return {"error": "Must provide 'name' or 'names' parameter"}
-
-    obj = bpy.data.objects.get(name)
-    if not obj:
-        return {"error": f"Object not found: {name}"}
-
-    bpy.data.objects.remove(obj, do_unlink=True)
-    return {"deleted": name}
-
-
-def set_material(
-    object_name: str = None,
-    object_names: list = None,
-    material_name: str = None,
-    color: list = None,
-) -> dict:
-    """Set or create a material on one or more objects with optional color.
-
-    Args:
-        object_name: Single object name (use this OR object_names)
-        object_names: List of object names for batch mode
-        material_name: Material name (if None, generates per-object names in single mode)
-        color: RGBA color [r, g, b, a] or RGB [r, g, b]
-
-    Returns:
-        Dictionary with before/after material states showing what changed
-    """
-    # Batch mode
-    if object_names:
-        # If no material name provided, generate a shared one for batch
-        if not material_name:
-            material_name = "BatchMaterial"
-
-        # Get or create material once for batch
-        mat = bpy.data.materials.get(material_name)
-        mat_existed = mat is not None
-        if not mat:
-            mat = bpy.data.materials.new(name=material_name)
-            mat.use_nodes = True
-
-        # Set color if provided
-        if color:
-            if len(color) == 3:
-                color = list(color) + [1.0]
-            if mat.use_nodes:
-                nodes = mat.node_tree.nodes
-                principled = nodes.get("Principled BSDF")
-                if principled:
-                    principled.inputs[0].default_value = color
-
-        # Track state changes
-        changed = {}
-        failed = {}
-
-        # Apply to all objects
-        for obj_name in object_names:
-            obj = bpy.data.objects.get(obj_name)
-            if not obj:
-                failed[obj_name] = {"error": "Object not found"}
-                continue
-
-            # Capture before state
-            before_material = None
-            if (
-                hasattr(obj, "data")
-                and hasattr(obj.data, "materials")
-                and obj.data.materials
-            ):
-                before_material = (
-                    obj.data.materials[0].name if obj.data.materials[0] else None
-                )
-
-            # Apply material
-            if obj.data.materials:
-                obj.data.materials[0] = mat
-            else:
-                obj.data.materials.append(mat)
-
-            # Record state change
-            changed[obj_name] = {
-                "before": {"material": before_material},
-                "after": {"material": material_name, "color": color if color else None},
-            }
-
-        # Get final material state
-        material_state = {
-            material_name: {
-                "color": color if color else None,
-                "assigned_to": list(changed.keys()),
-                "existed_before": mat_existed,
-            }
-        }
-
-        # Build result
-        result = {
-            "action": "set_material",
-            "requested": {
-                "objects": object_names,
-                "material": material_name,
-                "color": color,
-            },
-            "changed": changed,
-            "failed": failed,
-            "material_state": material_state,
-            "completed": len(changed),
-            "failed_count": len(failed),
-        }
-
-        # Add summary
-        summary_parts = []
-        if changed:
-            summary_parts.append(
-                f"Applied {material_name} to {len(changed)}/{len(object_names)} object(s)"
-            )
-        if failed:
-            failed_names = ", ".join(failed.keys())
-            summary_parts.append(f"Failed: {failed_names}")
-
-        result["summary"] = (
-            ". ".join(summary_parts) if summary_parts else "No materials applied"
-        )
-
-        return result
-
-    # Single mode
-    if not object_name:
-        return {"error": "Must provide 'object_name' or 'object_names' parameter"}
-
-    obj = bpy.data.objects.get(object_name)
-    if not obj:
-        return {"error": f"Object not found: {object_name}"}
-
-    # Capture before state
-    before_material = None
-    if hasattr(obj, "data") and hasattr(obj.data, "materials") and obj.data.materials:
-        before_material = obj.data.materials[0].name if obj.data.materials[0] else None
-
-    # If no material name provided, generate one
-    if not material_name:
-        material_name = f"Material_{object_name}"
-
-    # Get or create material
-    mat = bpy.data.materials.get(material_name)
-    mat_existed = mat is not None
-    if not mat:
-        mat = bpy.data.materials.new(name=material_name)
-        mat.use_nodes = True
-
-    # Set color if provided
-    if color:
-        if len(color) == 3:
-            color = list(color) + [1.0]
-        if mat.use_nodes:
-            nodes = mat.node_tree.nodes
-            principled = nodes.get("Principled BSDF")
-            if principled:
-                principled.inputs[0].default_value = color
-
-    # Assign material to object
-    if obj.data.materials:
-        obj.data.materials[0] = mat
-    else:
-        obj.data.materials.append(mat)
-
-    # Return state information
-    return {
-        "action": "set_material",
-        "changed": {
-            object_name: {
-                "before": {"material": before_material},
-                "after": {"material": material_name, "color": color if color else None},
-            }
-        },
-        "material_state": {
-            material_name: {
-                "color": color if color else None,
-                "assigned_to": [object_name],
-                "existed_before": mat_existed,
-            }
-        },
-        "summary": f"Applied {material_name} to {object_name}",
-    }
+    return info
 
 
 # Persistent namespace for execute_code (maintains state between calls)
@@ -834,6 +462,8 @@ def _get_code_namespace():
 
     if _CODE_NAMESPACE is None:
         import mathutils
+        import bmesh
+        import numpy as np
 
         try:
             from . import context_utils as _ctx_utils
@@ -844,6 +474,13 @@ def _get_code_namespace():
         _CODE_NAMESPACE = {
             "bpy": bpy,
             "mathutils": mathutils,
+            "bmesh": bmesh,
+            "numpy": np,
+            "np": np,
+            "Vector": mathutils.Vector,
+            "Matrix": mathutils.Matrix,
+            "Euler": mathutils.Euler,
+            "Color": mathutils.Color,
             "context_utils": _ctx_utils,
             "__builtins__": __builtins__,
             # Helper to explore available functions
@@ -914,6 +551,7 @@ class _AssistantSDK:
         self.stock_photos = self._StockPhotos(mcp)
         self.web = self._Web(mcp)
         self.rag = self._RAG(mcp)
+        self.memory = self._Memory(mcp)
 
         # SDK quick reference methods moved to class scope
 
@@ -932,14 +570,12 @@ class _AssistantSDK:
             "- polyhaven.search/download — PolyHaven assets (HDRIs, textures, models)\n"
             "- stock_photos.search/download — Pexels/Unsplash (API keys); download(..., apply_as_texture=False)\n"
             "- sketchfab.login/search/download — Sketchfab models\n"
-            "- web.search — basic web results (titles, URLs, snippets)\n"
+            "- web.search/fetch_page/extract_images/download_image — Web tools\n"
             "- rag.query/get_stats — Blender docs RAG (API/Manual); prefer_source='API'|'Manual'\n"
+            "- memory.remember_fact/remember_preference/remember_learning/search — Store long-term knowledge\n"
         )
 
-    class _Polyhaven:
-        def __init__(self, mcp):
-            self._mcp = mcp
-
+    class _Memory:
         def search(
             self, asset_type: str | None = None, query: str = "", limit: int = 10
         ):
@@ -1254,30 +890,51 @@ class _AssistantSDK:
             scale: list | None = None,
             text: str | None = None,
         ):
-            """Create an object (mesh primitive, text, camera/light, etc.).
+            """Create an object (mesh primitive, text, camera/light, etc.)."""
+            try:
+                # Convert type to uppercase
+                obj_type = type.upper()
+                
+                # Handle mesh primitives
+                if obj_type == "CUBE":
+                    bpy.ops.mesh.primitive_cube_add(location=location or (0, 0, 0))
+                elif obj_type == "SPHERE":
+                    bpy.ops.mesh.primitive_uv_sphere_add(location=location or (0, 0, 0))
+                elif obj_type == "PLANE":
+                    bpy.ops.mesh.primitive_plane_add(location=location or (0, 0, 0))
+                elif obj_type == "CYLINDER":
+                    bpy.ops.mesh.primitive_cylinder_add(location=location or (0, 0, 0))
+                elif obj_type == "CONE":
+                    bpy.ops.mesh.primitive_cone_add(location=location or (0, 0, 0))
+                elif obj_type == "TORUS":
+                    bpy.ops.mesh.primitive_torus_add(location=location or (0, 0, 0))
+                elif obj_type == "MONKEY":
+                    bpy.ops.mesh.primitive_monkey_add(location=location or (0, 0, 0))
+                
+                # Handle other types
+                elif obj_type == "TEXT":
+                    bpy.ops.object.text_add(location=location or (0, 0, 0))
+                    if text:
+                        bpy.context.active_object.data.body = text
+                elif obj_type == "CAMERA":
+                    bpy.ops.object.camera_add(location=location or (0, 0, 0))
+                elif obj_type == "LIGHT":
+                    bpy.ops.object.light_add(type="POINT", location=location or (0, 0, 0))
+                else:
+                    return {"error": f"Unknown object type: {type}"}
 
-            Args:
-                type: Object type (e.g., 'CUBE', 'SPHERE', 'TEXT', 'CAMERA', 'LIGHT').
-                name: Optional object name.
-                location: Optional [x, y, z].
-                rotation: Optional [x, y, z] Euler (radians).
-                scale: Optional [x, y, z].
-                text: TEXT object content (when type='TEXT').
-
-            Returns:
-                Dict describing the created object (via underlying tool).
-            """
-            return mcp_tools.execute_tool(
-                "create_object",
-                {
-                    "type": type,
-                    "name": name,
-                    "location": location,
-                    "rotation": rotation,
-                    "scale": scale,
-                    "text": text,
-                },
-            )
+                obj = bpy.context.active_object
+                if name:
+                    obj.name = name
+                
+                if rotation:
+                    obj.rotation_euler = rotation
+                if scale:
+                    obj.scale = scale
+                    
+                return {"success": True, "name": obj.name, "type": obj.type}
+            except Exception as e:
+                return {"error": f"Failed to create object: {str(e)}"}
 
         def modify_object(
             self,
@@ -1288,61 +945,62 @@ class _AssistantSDK:
             visible: bool | None = None,
             objects: list | None = None,
         ):
-            """Modify properties of objects.
-
-            Args:
-                name: Object name to modify (single mode).
-
-                location: Optional [x, y, z] (single mode).
-
-                rotation: Optional [x, y, z] Euler (radians) (single mode).
-
-                scale: Optional [x, y, z] (single mode).
-
-                visible: Optional visibility toggle (True/False) (single mode).
-
-                objects: Optional batch list of {name, location?, rotation?, scale?, visible?}.
-
-            Returns:
-
-                Dict describing the modification result.
-
-            """
-
-            payload = {}
-            if name is not None:
-                payload["name"] = name
-            if location is not None:
-                payload["location"] = location
-            if rotation is not None:
-                payload["rotation"] = rotation
-            if scale is not None:
-                payload["scale"] = scale
-            if visible is not None:
-                payload["visible"] = visible
-            if objects is not None:
-                payload["objects"] = objects
-            return mcp_tools.execute_tool("modify_object", payload)
+            """Modify properties of objects."""
+            try:
+                targets = []
+                if objects:
+                    targets.extend(objects)
+                if name:
+                    # Single object mode
+                    item = {"name": name}
+                    if location is not None: item["location"] = location
+                    if rotation is not None: item["rotation"] = rotation
+                    if scale is not None: item["scale"] = scale
+                    if visible is not None: item["visible"] = visible
+                    targets.append(item)
+                
+                modified = []
+                for item in targets:
+                    obj_name = item.get("name")
+                    obj = bpy.data.objects.get(obj_name)
+                    if not obj:
+                        continue
+                        
+                    if "location" in item:
+                        obj.location = item["location"]
+                    if "rotation" in item:
+                        obj.rotation_euler = item["rotation"]
+                    if "scale" in item:
+                        obj.scale = item["scale"]
+                    if "visible" in item:
+                        obj.hide_viewport = not item["visible"]
+                        obj.hide_render = not item["visible"]
+                        
+                    modified.append(obj.name)
+                    
+                return {"success": True, "modified": modified}
+            except Exception as e:
+                return {"error": f"Failed to modify objects: {str(e)}"}
 
         def delete_object(self, name: str | None = None, names: list | None = None):
-            """Delete object(s) by name.
-
-            Args:
-                name: Single object name.
-                names: List of object names (batch delete).
-
-            Returns:
-                Dict describing deleted items and any failures.
-            """
-            payload = {}
-
-            if name is not None:
-                payload["name"] = name
-
-            if names is not None:
-                payload["names"] = names
-
-            return mcp_tools.execute_tool("delete_object", payload)
+            """Delete object(s) by name."""
+            try:
+                targets = []
+                if names:
+                    targets.extend(names)
+                if name:
+                    targets.append(name)
+                
+                deleted = []
+                for obj_name in targets:
+                    obj = bpy.data.objects.get(obj_name)
+                    if obj:
+                        bpy.data.objects.remove(obj, do_unlink=True)
+                        deleted.append(obj_name)
+                        
+                return {"success": True, "deleted": deleted}
+            except Exception as e:
+                return {"error": f"Failed to delete objects: {str(e)}"}
 
         def set_material(
             self,
@@ -1351,36 +1009,64 @@ class _AssistantSDK:
             material_name: str | None = None,
             color: list | None = None,
         ):
-            """Assign or create a material on one or more objects.
-
-            Args:
-                object_name: Single object name (use this OR object_names).
-                object_names: List of object names (batch).
-                material_name: Target material name (created if missing).
-                color: Optional [r, g, b, a] or [r, g, b] base color for Principled BSDF.
-
-            Returns:
-                Dict with changed/failed and material state.
-            """
-            payload = {}
-            if object_name is not None:
-                payload["object_name"] = object_name
-
-            if object_names is not None:
-                payload["object_names"] = object_names
-
-            if material_name is not None:
-                payload["material_name"] = material_name
-
-            if color is not None:
-                payload["color"] = color
-
-            return mcp_tools.execute_tool("set_material", payload)
-
-        # Selection helpers
-        def get_selection(self):
-            return mcp_tools.execute_tool("get_selection", {})
-
+            """Assign or create a material on one or more objects."""
+            try:
+                targets = []
+                if object_names:
+                    targets.extend(object_names)
+                if object_name:
+                    targets.append(object_name)
+                
+                if not targets:
+                    return {"error": "No objects specified"}
+                
+                # Get or create material
+                mat = None
+                if material_name:
+                    mat = bpy.data.materials.get(material_name)
+                    if not mat:
+                        mat = bpy.data.materials.new(name=material_name)
+                        mat.use_nodes = True
+                
+                # If color provided, update material (or create temp one if no name)
+                if color:
+                    if not mat:
+                        mat = bpy.data.materials.new(name="Material")
+                        mat.use_nodes = True
+                    
+                    # Set base color on Principled BSDF
+                    if mat.node_tree:
+                        bsdf = None
+                        for n in mat.node_tree.nodes:
+                            if n.type == "BSDF_PRINCIPLED":
+                                bsdf = n
+                                break
+                        if not bsdf:
+                            bsdf = mat.node_tree.nodes.new("ShaderNodeBsdfPrincipled")
+                        
+                        # Handle 3-tuple or 4-tuple color
+                        c = list(color)
+                        if len(c) == 3:
+                            c.append(1.0)
+                        bsdf.inputs["Base Color"].default_value = c
+                
+                if not mat:
+                    return {"error": "No material name or color specified"}
+                
+                # Assign to objects
+                assigned = []
+                for obj_name in targets:
+                    obj = bpy.data.objects.get(obj_name)
+                    if obj and obj.type == "MESH":
+                        if not obj.data.materials:
+                            obj.data.materials.append(mat)
+                        else:
+                            obj.data.materials[0] = mat
+                        assigned.append(obj_name)
+                        
+                return {"success": True, "material": mat.name, "assigned_to": assigned}
+            except Exception as e:
+                return {"error": f"Failed to set material: {str(e)}"}
         def get_active(self):
             """Get the active object name (if any)."""
             return mcp_tools.execute_tool("get_active", {})
@@ -1408,6 +1094,24 @@ class _AssistantSDK:
             """Select all objects of a given Blender type (e.g., 'MESH')."""
             return mcp_tools.execute_tool(
                 "select_by_type", {"object_type": object_type}
+            )
+
+        def capture_viewport(
+            self,
+            question: str,
+            max_size: int = 1024,
+            vision_model: str | None = None,
+            timeout_s: int = 15,
+        ):
+            """Capture the viewport and ask a vision model a question."""
+            return mcp_tools.execute_tool(
+                "capture_viewport_for_vision",
+                {
+                    "question": question,
+                    "max_size": max_size,
+                    "vision_model": vision_model,
+                    "timeout_s": timeout_s,
+                },
             )
 
     class _Sketchfab:
@@ -1658,6 +1362,32 @@ class _AssistantSDK:
                 "web_search", {"query": query, "num_results": num_results}
             )
 
+        def fetch_page(self, url: str, max_length: int = 10000):
+            """Fetch and extract text content from a webpage."""
+            return mcp_tools.execute_tool(
+                "fetch_webpage", {"url": url, "max_length": max_length}
+            )
+
+        def extract_images(self, url: str, min_width: int = 400, max_images: int = 10):
+            """Extract likely content image URLs from a webpage."""
+            return mcp_tools.execute_tool(
+                "extract_image_urls",
+                {"url": url, "min_width": min_width, "max_images": max_images},
+            )
+
+        def download_image(
+            self, image_url: str, apply_to_active: bool = True, pack_image: bool = True
+        ):
+            """Download an image and optionally apply it as a texture."""
+            return mcp_tools.execute_tool(
+                "download_image_as_texture",
+                {
+                    "image_url": image_url,
+                    "apply_to_active": apply_to_active,
+                    "pack_image": pack_image,
+                },
+            )
+
     class _RAG:
         def __init__(self, mcp):
             self._mcp = mcp
@@ -1703,8 +1433,14 @@ class _AssistantSDK:
 def _get_assistant_sdk():
     try:
         return _AssistantSDK(mcp_tools)
-    except Exception:
-        return None
+    except Exception as e:
+        print(f"[Assistant] CRITICAL: Failed to initialize assistant_sdk: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return a minimal stub so code doesn't crash entirely
+        class _StubSDK:
+            pass
+        return _StubSDK()
 
 
 def execute_code(code: str) -> dict:
@@ -1718,6 +1454,9 @@ def execute_code(code: str) -> dict:
     - mathutils: Vector, Matrix, Euler, etc.
     - assistant_sdk: Pre-initialized SDK for tools (blender, polyhaven, sketchfab, stock_photos, web, rag)
     - Any variables/functions you define persist between calls
+
+    **BEST PRACTICE**: Use `assistant_sdk.blender.*` methods (e.g., `assistant_sdk.blender.move_to_collection`) 
+    instead of writing raw `bpy` logic for common tasks. They are safer and handle edge cases.
 
     IMPORTANT: assistant_sdk is already available in the namespace. Do NOT import it!
 
@@ -2586,495 +2325,214 @@ def delete_collection(collection_name: str, delete_objects: bool = False) -> dic
         return {"error": f"Failed to delete collection: {str(e)}"}
 
 
-def ensure_collections(names: list, parent: str = None) -> dict:
-    """Ensure a list of collections exist. Create missing ones.
 
-    Args:
-        names: List of collection names to ensure exist
-        parent: Optional parent collection for newly created ones (omit for scene root)
 
-    Returns:
-        Dict with created, existing, and errors
+def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
+    """Return usage information for assistant_sdk tools.
+
+    Can look up tools by alias (e.g. "polyhaven.search") or namespace (e.g. "assistant_sdk.polyhaven").
+    Supports multiple lookups and fuzzy matching.
     """
     try:
-        created = []
-        existing = []
-        errors = []
-
-        parent_col = None
-        if parent:
-            parent_col = resolve_collection_by_name(parent)
-            if not parent_col:
-                return {"error": f"Parent collection '{parent}' not found"}
-
-        for name in names or []:
-            col = resolve_collection_by_name(name)
-            if col:
-                existing.append(name)
-                continue
-            # Create and link
-            new_col = bpy.data.collections.new(name)
-            if parent_col:
-                parent_col.children.link(new_col)
-            else:
-                scene_root = _get_scene_root()
-                (scene_root or bpy.context.scene.collection).children.link(new_col)
-            created.append(name)
-
-        return {
-            "success": True,
-            "created": created,
-            "existing": existing,
-            "message": f"Ensured {len(names or [])} collection(s): {len(created)} created, {len(existing)} existing",
-        }
-    except Exception as e:
-        return {"error": f"Failed to ensure collections: {str(e)}"}
-
-
-def safe_move_objects(
-    object_names: list,
-    collection_name: str,
-    create_if_missing: bool = True,
-    unlink_from_others: bool = True,
-) -> dict:
-    """Move objects to a target collection; create the collection if needed.
-
-    Args:
-        object_names: Objects to move
-        collection_name: Target collection
-        create_if_missing: Create target if it's missing (default True)
-        unlink_from_others: Unlink from other collections
-    """
-    try:
-        target_col = resolve_collection_by_name(collection_name)
-        if not target_col:
-            if create_if_missing:
-                # Create at scene root
-                create_result = create_collection(name=collection_name)
-                if isinstance(create_result, dict) and create_result.get("error"):
-                    return create_result
-                target_col = resolve_collection_by_name(collection_name)
-            else:
-                return {"error": f"Collection '{collection_name}' not found"}
-
-        return move_to_collection(
-            object_names=object_names,
-            collection_name=collection_name,
-            unlink_from_others=unlink_from_others,
-        )
-    except Exception as e:
-        return {"error": f"Failed to move objects: {str(e)}"}
-
-
-def set_collections_color_batch(
-    collection_names: list, color_tag: str = "COLOR_01"
-) -> dict:
-    """Set a color tag on multiple collections.
-
-    Args:
-        collection_names: List of collections to color-tag
-        color_tag: COLOR_01..COLOR_08 or NONE
-    """
-    try:
-        updated = []
-        not_found = []
-        skipped = []
-        for name in collection_names or []:
-            col = resolve_collection_by_name(name)
-            if not col:
-                not_found.append(name)
-                continue
-            if hasattr(col, "color_tag"):
-                col.color_tag = color_tag
-                updated.append(name)
-            else:
-                skipped.append(
-                    {"name": name, "reason": "Collection has no color_tag property"}
-                )
-        result = {"success": True, "updated": updated, "color_tag": color_tag}
-        if not_found:
-            result["not_found"] = not_found
-            result["suggestion"] = (
-                "Use ensure_collections(names=[...]) to create missing collections"
-            )
-        if skipped:
-            result["skipped"] = skipped
-        return result
-    except Exception as e:
-        return {"error": f"Failed to set collection colors: {str(e)}"}
-
-
-def assistant_help(tool: str = "", tools: list | None = None) -> dict:
-    """Return JSON Schemas for one or more assistant_sdk tool aliases.
-
-    Usage examples (tool aliases):
-
-      - "polyhaven.search"            -> search_polyhaven_assets
-      - "polyhaven.download"          -> download_polyhaven
-
-      - "blender.get_scene_info"      -> get_scene_info
-      - "blender.get_object_info"     -> get_object_info
-      - "blender.list_collections"    -> list_collections
-      - "blender.get_collection_info" -> get_collection_info
-      - "blender.create_collection"   -> create_collection
-      - "blender.move_to_collection"  -> move_to_collection
-      - "blender.set_collection_color"-> set_collection_color
-      - "blender.delete_collection"   -> delete_collection
-      - "blender.get_selection"       -> get_selection
-      - "blender.get_active"          -> get_active
-      - "blender.set_selection"       -> set_selection
-      - "blender.set_active"          -> set_active
-      - "blender.select_by_type"      -> select_by_type
-      - "blender.create_object"       -> create_object
-      - "blender.modify_object"       -> modify_object
-      - "blender.delete_object"       -> delete_object
-      - "blender.set_material"        -> set_material
-
-      - "vision.capture"              -> capture_viewport_for_vision
-      - "vision.capture_viewport"     -> capture_viewport_for_vision
-
-      - "web.search"                  -> web_search
-      - "web.fetch"                   -> fetch_webpage
-      - "web.extract_image_urls"      -> extract_image_urls
-      - "web.wikimedia_image"         -> search_wikimedia_image
-      - "web.download_image"          -> download_image_as_texture
-
-      - "sketchfab.login"             -> sketchfab_login
-      - "sketchfab.search"            -> sketchfab_search
-      - "sketchfab.download"          -> sketchfab_download_model
-
-      - "stock_photos.search"         -> search_stock_photos    (requires configured API keys)
-      - "stock_photos.download"       -> download_stock_photo   (requires configured API keys)
-
-      - "rag.query"                   -> rag_query
-      - "rag.get_stats"               -> rag_get_stats
-
-    Namespace expansion (pass the namespace to list its common tools):
-
-      - "assistant_sdk.web"           -> expands to web.search/fetch/extract_image_urls/wikimedia_image/download_image
-      - "assistant_sdk.sketchfab"     -> expands to sketchfab.login/search/download
-      - "assistant_sdk.stock_photos"  -> expands to stock_photos.search/download
-      - "assistant_sdk.rag"           -> expands to rag.query/get_stats
-      - "assistant_sdk.blender"       -> expands to common blender.* tools
-      - "assistant_sdk"               -> expands to all supported namespaces above
-
-    Also accepts underlying tool names directly (e.g., "get_scene_info").
-    """
-    try:
-        # Build list of requested aliases
-        aliases: list[str] = []
+        # Build list of requested queries
+        queries: list[str] = []
         if tools and isinstance(tools, (list, tuple)):
-            aliases.extend([str(t).strip() for t in tools if str(t).strip()])
+            queries.extend([str(t).strip() for t in tools if str(t).strip()])
         if tool and str(tool).strip():
-            aliases.append(str(tool).strip())
-        if not aliases:
+            queries.append(str(tool).strip())
+            
+        if not queries:
             return {"error": "Missing 'tool' or 'tools' parameter"}
 
-        # SDK-only guidance. Do not expose or echo MCP tool names/schemas here.
-        # assistant_help should teach how to use assistant_sdk.* methods.
-        # We still inspect the MCP registry only for conditional gating (e.g., stock photos).
-        tool_defs = mcp_tools.get_tools_list() or []
-        registered = {
-            t.get("name") for t in tool_defs if isinstance(t, dict) and t.get("name")
-        }
-
-        # Helper: add a result row for a specific SDK alias
-        def _add_sdk_result(out: list, alias_key: str):
+        # Define the knowledge base of SDK tools
+        # Format: alias -> {sdkUsage, notes}
+        sdk_docs = {
             # PolyHaven
-            if alias_key == "polyhaven.search":
-                out.append(
-                    {
-                        "alias": "polyhaven.search",
-                        "sdkUsage": "assistant_sdk.polyhaven.search(asset_type='hdri'|'texture'|'model', query='', limit=10)",
-                        "notes": "Use to find HDRIs, textures, or models on PolyHaven; iterate results['assets'] before downloading.",
-                    }
-                )
-            elif alias_key == "polyhaven.download":
-                out.append(
-                    {
-                        "alias": "polyhaven.download",
-                        "sdkUsage": "assistant_sdk.polyhaven.download(asset=a or asset_id='id', asset_type='hdri'|'texture'|'model', resolution='2k')",
-                        "notes": "Use to download/import a PolyHaven asset; pass asset (dict) or asset_id + asset_type. For hdri/texture, set resolution.",
-                    }
-                )
+            "polyhaven.search": {
+                "sdkUsage": "assistant_sdk.polyhaven.search(asset_type='hdri'|'texture'|'model', query='', limit=10)",
+                "notes": "Returns dict with 'assets' list. Iterate results['assets'] to find items."
+            },
+            "polyhaven.download": {
+                "sdkUsage": "assistant_sdk.polyhaven.download(asset=asset_dict, asset_type='type', resolution='2k')",
+                "notes": "Downloads and imports asset. Pass the full asset dict from search, or asset_id."
+            },
+            
+            # Blender - Scene
+            "blender.get_scene_info": {
+                "sdkUsage": "assistant_sdk.blender.get_scene_info(expand_depth=2)",
+                "notes": "Returns JSON tree of scene objects/collections."
+            },
+            "blender.get_object_info": {
+                "sdkUsage": "assistant_sdk.blender.get_object_info(object_names=['Name'])",
+                "notes": "Get detailed info for specific objects."
+            },
+            "blender.list_collections": {
+                "sdkUsage": "assistant_sdk.blender.list_collections()",
+                "notes": "List all collection names."
+            },
+            "blender.get_collection_info": {
+                "sdkUsage": "assistant_sdk.blender.get_collection_info(collection_names=['Name'])",
+                "notes": "Get info about specific collections."
+            },
+            
+            # Blender - Manipulation
+            "blender.create_collection": {
+                "sdkUsage": "assistant_sdk.blender.create_collection(name='Name', parent='Parent')",
+                "notes": "Create a new collection."
+            },
+            "blender.move_to_collection": {
+                "sdkUsage": "assistant_sdk.blender.move_to_collection(object_names=['Obj'], collection_name='Col')",
+                "notes": "Move objects to a collection."
+            },
+            "blender.set_collection_color": {
+                "sdkUsage": "assistant_sdk.blender.set_collection_color(collection_name='Col', color_tag='COLOR_01')",
+                "notes": "Set collection color tag."
+            },
+            "blender.delete_collection": {
+                "sdkUsage": "assistant_sdk.blender.delete_collection(collection_names=['Col'], delete_objects=False)",
+                "notes": "Delete collections."
+            },
+            
+            # Blender - Selection/Active
+            "blender.get_selection": {
+                "sdkUsage": "assistant_sdk.blender.get_selection()",
+                "notes": "Get list of selected object names."
+            },
+            "blender.set_selection": {
+                "sdkUsage": "assistant_sdk.blender.set_selection(object_names=['Obj'], replace=True)",
+                "notes": "Set selected objects."
+            },
+            "blender.get_active": {
+                "sdkUsage": "assistant_sdk.blender.get_active()",
+                "notes": "Get active object name."
+            },
+            "blender.set_active": {
+                "sdkUsage": "assistant_sdk.blender.set_active(object_name='Obj')",
+                "notes": "Set active object."
+            },
+            "blender.select_by_type": {
+                "sdkUsage": "assistant_sdk.blender.select_by_type(type='MESH')",
+                "notes": "Select objects by type."
+            },
+            
+
+            
+            # Vision
+            "vision.capture": {
+                "sdkUsage": "assistant_sdk.vision.capture_viewport_for_vision()",
+                "notes": "SDK (execute_code): Capture 3D viewport as base64 image."
+            },
+            
+            # Web
+            "web.search": {
+                "sdkUsage": "assistant_sdk.web.search(query='query', num_results=5)",
+                "notes": "SDK (execute_code): Search the web (DuckDuckGo)."
+            },
+            "web.fetch": {
+                "sdkUsage": "assistant_sdk.web.fetch_page(url='url')",
+                "notes": "SDK (execute_code): Fetch webpage content as markdown."
+            },
+            "web.extract_image_urls": {
+                "sdkUsage": "assistant_sdk.web.extract_image_urls(url='url')",
+                "notes": "SDK (execute_code): Find image URLs on a page."
+            },
+            "web.download_image": {
+                "sdkUsage": "assistant_sdk.web.download_image(image_url='url')",
+                "notes": "SDK (execute_code): Download image and load as Blender image/texture."
+            },
+            
             # Sketchfab
-            elif alias_key == "sketchfab.login":
-                out.append(
-                    {
-                        "alias": "sketchfab.login",
-                        "sdkUsage": "assistant_sdk.sketchfab.login(email, password, save_token=False)",
-                        "notes": "Authenticate with Sketchfab; optionally persist token via save_token=True.",
-                    }
-                )
-            elif alias_key == "sketchfab.search":
-                out.append(
-                    {
-                        "alias": "sketchfab.search",
-                        "sdkUsage": "assistant_sdk.sketchfab.search(query, page=1, per_page=24, downloadable_only=True, sort_by='relevance')",
-                        "notes": "Find downloadable models; set downloadable_only=True to filter; supports sorting.",
-                    }
-                )
-            elif alias_key == "sketchfab.download":
-                out.append(
-                    {
-                        "alias": "sketchfab.download",
-                        "sdkUsage": "assistant_sdk.sketchfab.download(uid, import_into_scene=True, name_hint='')",
-                        "notes": "Download/import the specified model UID into the scene.",
-                    }
-                )
-            # Stock Photos (always document, note API key/registration requirements)
-            elif alias_key == "stock_photos.search":
-                out.append(
-                    {
-                        "alias": "stock_photos.search",
-                        "sdkUsage": "assistant_sdk.stock_photos.search(source='unsplash'|'pexels', query='...', per_page=10, orientation='')",
-                        "notes": "Search Pexels/Unsplash (API keys required); returns a provider-specific 'photos' list.",
-                    }
-                )
-            elif alias_key == "stock_photos.download":
-                out.append(
-                    {
-                        "alias": "stock_photos.download",
-                        "sdkUsage": "assistant_sdk.stock_photos.download(source='unsplash'|'pexels', photo_id='...', apply_as_texture=False)",
-                        "notes": "Download a photo; set apply_as_texture=True to apply to the active object.",
-                    }
-                )
-
-            # Web (SDK provides search wrapper)
-            elif alias_key == "web.search":
-                out.append(
-                    {
-                        "alias": "web.search",
-                        "sdkUsage": "assistant_sdk.web.search(query, num_results=5)",
-                        "nativeTool": "web_search",
-                        "notes": "Retrieve basic web results (titles, URLs, snippets).",
-                    }
-                )
+            "sketchfab.search": {
+                "sdkUsage": "assistant_sdk.sketchfab.search(query='q', type='models')",
+                "notes": "SDK (execute_code): Search Sketchfab."
+            },
+            "sketchfab.download": {
+                "sdkUsage": "assistant_sdk.sketchfab.download(uid='uid')",
+                "notes": "SDK (execute_code): Download model from Sketchfab."
+            },
+            
             # RAG
-
-            elif alias_key == "rag.query":
-                out.append(
-                    {
-                        "alias": "rag.query",
-                        "sdkUsage": "assistant_sdk.rag.query(query, num_results=5, prefer_source=None, page_types=None, excerpt_chars=600)",
-                        "notes": "Use to look up relevant Blender API/Manual references from the local docs. Set prefer_source to 'API' or 'Manual' to bias results.",
-                    }
-                )
-
-            elif alias_key == "rag.get_stats":
-                out.append(
-                    {
-                        "alias": "rag.get_stats",
-                        "sdkUsage": "assistant_sdk.rag.get_stats()",
-                        "notes": "Check whether local docs are loaded (enabled) and basic corpus stats.",
-                    }
-                )
-
-            # Blender (SDK wrappers mirror many native operations)
-            elif alias_key == "blender.get_scene_info":
-                out.append(
-                    {
-                        "alias": "blender.get_scene_info",
-                        "sdkUsage": "assistant_sdk.blender.get_scene_info(expand_depth=1, expand=[], focus=[], fold_state=None, max_children=50, include_icons=True, include_counts=True, root_filter=None)",
-                        "notes": "Outliner-style snapshot; persist fold_state across turns.",
-                    }
-                )
-            elif alias_key == "blender.get_object_info":
-                out.append(
-                    {
-                        "alias": "blender.get_object_info",
-                        "sdkUsage": "assistant_sdk.blender.get_object_info(name)",
-                        "notes": "Detailed info for a specific object.",
-                    }
-                )
-            elif alias_key == "blender.list_collections":
-                out.append(
-                    {
-                        "alias": "blender.list_collections",
-                        "sdkUsage": "assistant_sdk.blender.list_collections()",
-                        "notes": "List collections with hierarchy and counts.",
-                    }
-                )
-            elif alias_key == "blender.get_collection_info":
-                out.append(
-                    {
-                        "alias": "blender.get_collection_info",
-                        "sdkUsage": "assistant_sdk.blender.get_collection_info(collection_name)",
-                        "notes": "Info about a specific collection (color tag, objects, children).",
-                    }
-                )
-            elif alias_key == "blender.create_collection":
-                out.append(
-                    {
-                        "alias": "blender.create_collection",
-                        "sdkUsage": "assistant_sdk.blender.create_collection(name, parent=None)",
-                        "notes": "Create a collection at the scene root or under parent.",
-                    }
-                )
-            elif alias_key == "blender.move_to_collection":
-                out.append(
-                    {
-                        "alias": "blender.move_to_collection",
-                        "sdkUsage": "assistant_sdk.blender.move_to_collection(object_names, collection_name, unlink_from_others=True, create_if_missing=True)",
-                        "notes": "Batch move; unlinks from other collections by default.",
-                    }
-                )
-            elif alias_key == "blender.set_collection_color":
-                out.append(
-                    {
-                        "alias": "blender.set_collection_color",
-                        "sdkUsage": "assistant_sdk.blender.set_collection_color(collection_name=None, collection_names=None, color_tag='COLOR_01')",
-                        "notes": "Outliner color tag (Blender 4.2+).",
-                    }
-                )
-            elif alias_key == "blender.delete_collection":
-                out.append(
-                    {
-                        "alias": "blender.delete_collection",
-                        "sdkUsage": "assistant_sdk.blender.delete_collection(collection_name, delete_objects=False)",
-                        "notes": "Delete collection; optional delete of contained objects.",
-                    }
-                )
-            elif alias_key == "blender.get_selection":
-                out.append(
-                    {
-                        "alias": "blender.get_selection",
-                        "sdkUsage": "assistant_sdk.blender.get_selection()",
-                        "notes": "Get current selection list.",
-                    }
-                )
-            elif alias_key == "blender.get_active":
-                out.append(
-                    {
-                        "alias": "blender.get_active",
-                        "sdkUsage": "assistant_sdk.blender.get_active()",
-                        "notes": "Get the active object name if any.",
-                    }
-                )
-            elif alias_key == "blender.set_selection":
-                out.append(
-                    {
-                        "alias": "blender.set_selection",
-                        "sdkUsage": "assistant_sdk.blender.set_selection(object_names)",
-                        "notes": "Set the selection to a list of names.",
-                    }
-                )
-            elif alias_key == "blender.set_active":
-                out.append(
-                    {
-                        "alias": "blender.set_active",
-                        "sdkUsage": "assistant_sdk.blender.set_active(object_name)",
-                        "notes": "Set the active object by name.",
-                    }
-                )
-            elif alias_key == "blender.select_by_type":
-                out.append(
-                    {
-                        "alias": "blender.select_by_type",
-                        "sdkUsage": "assistant_sdk.blender.select_by_type(object_type)",
-                        "notes": "Select objects by Blender type (e.g., 'MESH').",
-                    }
-                )
-            elif alias_key == "blender.create_object":
-                out.append(
-                    {
-                        "alias": "blender.create_object",
-                        "sdkUsage": "assistant_sdk.blender.create_object(type, name=None, location=None, rotation=None, scale=None, text=None)",
-                        "notes": "Create objects (meshes, lights, cameras, text, curves, empties).",
-                    }
-                )
-            elif alias_key == "blender.modify_object":
-                out.append(
-                    {
-                        "alias": "blender.modify_object",
-                        "sdkUsage": "assistant_sdk.blender.modify_object(name, location=None, rotation=None, scale=None, visible=None, objects=None)",
-                        "notes": "Modify a single object or a batch via 'objects'.",
-                    }
-                )
-            elif alias_key == "blender.delete_object":
-                out.append(
-                    {
-                        "alias": "blender.delete_object",
-                        "sdkUsage": "assistant_sdk.blender.delete_object(name=None, names=None)",
-                        "notes": "Delete a single object or a batch by names list.",
-                    }
-                )
-            elif alias_key == "blender.set_material":
-                out.append(
-                    {
-                        "alias": "blender.set_material",
-                        "sdkUsage": "assistant_sdk.blender.set_material(object_name=None, object_names=None, material_name=None, color=None)",
-                        "notes": "Create/assign a material; optional RGBA color.",
-                    }
-                )
-
-        # SDK namespace expansions (assistant_sdk.* and short namespaces)
-        sdk_namespace_map = {
-            "polyhaven": ["polyhaven.search", "polyhaven.download"],
-            "sketchfab": ["sketchfab.login", "sketchfab.search", "sketchfab.download"],
-            "stock_photos": [
-                "stock_photos.search",
-                "stock_photos.download",
-            ],
-            "web": ["web.search"],
-            "rag": ["rag.query", "rag.get_stats"],
-            "blender": [
-                "blender.get_scene_info",
-                "blender.get_object_info",
-                "blender.list_collections",
-                "blender.get_collection_info",
-                "blender.create_collection",
-                "blender.move_to_collection",
-                "blender.set_collection_color",
-                "blender.delete_collection",
-                "blender.get_selection",
-                "blender.get_active",
-                "blender.set_selection",
-                "blender.set_active",
-                "blender.select_by_type",
-                "blender.create_object",
-                "blender.modify_object",
-                "blender.delete_object",
-                "blender.set_material",
-            ],
+            "rag.query": {
+                "sdkUsage": "assistant_sdk.rag.query(text='question')",
+                "notes": "SDK (execute_code): Query documentation."
+            },
+            
+            # Memory
+            "memory.remember_fact": {
+                "sdkUsage": "assistant_sdk.memory.remember_fact(fact='fact', category='general')",
+                "notes": "SDK (execute_code): Store a general fact."
+            },
+            "memory.remember_preference": {
+                "sdkUsage": "assistant_sdk.memory.remember_preference(key='key', value='value')",
+                "notes": "SDK (execute_code): Store a user preference."
+            },
+            "memory.remember_learning": {
+                "sdkUsage": "assistant_sdk.memory.remember_learning(topic='topic', insight='insight')",
+                "notes": "SDK (execute_code): Record a technical learning/pitfall."
+            },
+            "memory.search": {
+                "sdkUsage": "assistant_sdk.memory.search(query='query')",
+                "notes": "SDK (execute_code): Semantic search of memory."
+            }
         }
 
-        results: list[dict] = []
-        for alias in aliases:
-            norm = alias.lower().strip()
-            if norm.startswith("assistant_sdk."):
-                norm = norm[len("assistant_sdk.") :]
-
-            # Namespace expansion
-            expanded: list[str] = []
-            if norm in ("assistant_sdk",):
-                for v in sdk_namespace_map.values():
-                    expanded.extend(v)
-            elif norm in sdk_namespace_map:
-                expanded.extend(sdk_namespace_map[norm])
-
-            if expanded:
-                for sku in expanded:
-                    _add_sdk_result(results, sku)
-                continue
-
-            # Single alias: accept only known SDK-style aliases; ignore raw MCP tool names
-            _add_sdk_result(results, norm)
-
-        dedup = []
+        results = []
+        
+        for q in queries:
+            # Normalize query: remove 'assistant_sdk.' prefix, handle 'tool/subtool'
+            clean_q = q.replace("assistant_sdk.", "").lower()
+            
+            # Split by slash if present (e.g. "polyhaven.search/download")
+            sub_queries = clean_q.split("/")
+            
+            for sub_q in sub_queries:
+                sub_q = sub_q.strip()
+                if not sub_q:
+                    continue
+                    
+                # 1. Exact match
+                if sub_q in sdk_docs:
+                    res = sdk_docs[sub_q]
+                    # res["alias"] = sub_q <-- REMOVED
+                    results.append(res)
+                    continue
+                    
+                # 2. Namespace match (e.g. "polyhaven")
+                namespace_matches = [k for k in sdk_docs.keys() if k.startswith(sub_q + ".")]
+                if namespace_matches:
+                    for k in namespace_matches:
+                        res = sdk_docs[k].copy()
+                        # res["alias"] = k  <-- REMOVED
+                        results.append(res)
+                    continue
+                    
+                # 3. Fuzzy/Contains match
+                fuzzy_matches = [k for k in sdk_docs.keys() if sub_q in k]
+                if fuzzy_matches:
+                    for k in fuzzy_matches:
+                        res = sdk_docs[k].copy()
+                        # res["alias"] = k <-- REMOVED
+                        results.append(res)
+                    continue
+                    
+        # Remove duplicates
+        unique_results = []
         seen = set()
         for r in results:
-            key = (r.get("alias"), r.get("sdkUsage"))
+            # Use sdkUsage as unique key since alias is gone
+            key = r["sdkUsage"]
             if key not in seen:
                 seen.add(key)
-                dedup.append(r)
-        return {"results": dedup}
+                unique_results.append(r)
+                
+        return {"results": unique_results}
 
     except Exception as e:
-        return {"error": f"assistant_help failed: {str(e)}"}
+        import traceback
+        return {"error": f"Help failed: {str(e)}", "traceback": traceback.format_exc()}
 
 
-def register_tools():
+def register():
     """Register all Blender tools with the MCP registry."""
 
     # get_scene_info
@@ -3150,175 +2608,18 @@ def register_tools():
 
     # create_object
 
-    mcp_tools.register_tool(
-        "create_object",
-        create_object,
-        "Create objects: meshes, cameras, lights, text, curves, empties",
-        {
-            "type": "object",
-            "properties": {
-                "type": {
-                    "type": "string",
-                    "description": "Object type",
-                    "enum": [
-                        # Mesh primitives
-                        "CUBE",
-                        "SPHERE",
-                        "CYLINDER",
-                        "CONE",
-                        "TORUS",
-                        "PLANE",
-                        "MONKEY",
-                        "ICOSPHERE",
-                        # Cameras
-                        "CAMERA",
-                        # Lights
-                        "LIGHT",
-                        "POINT_LIGHT",
-                        "SUN",
-                        "SUN_LIGHT",
-                        "SPOT",
-                        "SPOT_LIGHT",
-                        "AREA",
-                        "AREA_LIGHT",
-                        # Text
-                        "TEXT",
-                        # Curves
-                        "CURVE",
-                        "BEZIER_CURVE",
-                        "BEZIER_CIRCLE",
-                        "NURBS_CURVE",
-                        "NURBS_CIRCLE",
-                        "PATH",
-                        # Empties
-                        "EMPTY",
-                        "EMPTY_ARROWS",
-                        "EMPTY_CUBE",
-                        "EMPTY_SPHERE",
-                    ],
-                },
-                "name": {"type": "string", "description": "Optional name"},
-                "location": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "Location [x, y, z]",
-                },
-                "rotation": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "Euler rotation [x, y, z]",
-                },
-                "scale": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "Scale [x, y, z]",
-                },
-                "text": {"type": "string", "description": "Text content for TEXT"},
-            },
-            "required": [],
-        },
-        category="Blender",
-    )
+
 
     # modify_object
-    mcp_tools.register_tool(
-        "modify_object",
-        modify_object,
-        "Modify an existing object's properties",
-        {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Object name"},
-                "location": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "New location [x, y, z]",
-                },
-                "rotation": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "New Euler rotation [x, y, z]",
-                },
-                "scale": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "New scale [x, y, z]",
-                },
-                "visible": {"type": "boolean", "description": "Set visibility"},
-                "objects": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "location": {"type": "array", "items": {"type": "number"}},
-                            "rotation": {"type": "array", "items": {"type": "number"}},
-                            "scale": {"type": "array", "items": {"type": "number"}},
-                            "visible": {"type": "boolean"},
-                        },
-                        "required": ["name"],
-                    },
-                    "description": "Batch list of objects to modify ({name, location?, rotation?, scale?, visible?})",
-                },
-            },
-            "required": [],
-        },
-        category="Blender",
-    )
+
 
     # delete_object (supports batch via 'names')
 
-    mcp_tools.register_tool(
-        "delete_object",
-        delete_object,
-        "Delete one or more objects. Prefer batch via 'names'.",
-        {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Single object name"},
-                "names": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of object names",
-                },
-            },
-            "required": [],
-        },
-        category="Blender",
-    )
+
 
     # set_material
 
-    mcp_tools.register_tool(
-        "set_material",
-        set_material,
-        "Set or create a material on an object with optional color",
-        {
-            "type": "object",
-            "properties": {
-                "object_name": {
-                    "type": "string",
-                    "description": "Object name (single)",
-                },
-                "object_names": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of object names (batch)",
-                },
-                "material_name": {
-                    "type": "string",
-                    "description": "Material name (auto if omitted)",
-                },
-                "color": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "RGBA [r, g, b, a] 0.0-1.0",
-                },
-            },
-            "required": [],
-        },
-        category="Blender",
-    )
+
 
     # execute_code
 
@@ -3529,21 +2830,214 @@ def register_tools():
         category="Blender",
     )
 
+    # capture_viewport_for_vision (vision models only)
+
+    mcp_tools.register_tool(
+        "capture_viewport_for_vision",
+        capture_viewport_for_vision,
+        "Synchronously capture the current viewport and run a vision model to answer a question about the scene. Returns only the textual description and metadata (no image).",
+        {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "What to analyze in the captured viewport image (e.g., 'Are there 9 cubes? Label them.').",
+                },
+                "max_size": {
+                    "type": "integer",
+                    "description": "Max width/height in pixels for the captured image",
+                    "default": 1024,
+                },
+                "vision_model": {
+                    "type": "string",
+                    "description": "Optional override for the vision model name (uses default from preferences if omitted)",
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "description": "Max seconds to wait for vision analysis before timing out",
+                    "default": 15,
+                    "minimum": 1,
+                    "maximum": 120,
+                },
+            },
+            "required": ["question"],
+        },
+        category="Vision",
+    )
+
+    # Collection tools
+
+    # list_collections
+
+    mcp_tools.register_tool(
+        "list_collections",
+        list_collections,
+        "List all collections with hierarchy and object counts",
+        {"type": "object", "properties": {}, "required": []},
+        category="Blender",
+    )
+
+    # get_collection_info
+
+    mcp_tools.register_tool(
+        "get_collection_info",
+        get_collection_info,
+        "Get info about a specific collection (objects and children)",
+        {
+            "type": "object",
+            "properties": {
+                "collection_name": {
+                    "type": "string",
+                    "description": "Collection name",
+                }
+            },
+            "required": ["collection_name"],
+        },
+        category="Blender",
+    )
+
+    # create_collection (supports batch via 'collections')
+
+    mcp_tools.register_tool(
+        "create_collection",
+        create_collection,
+        "Create one or more collections. Batch via 'collections'.",
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Single collection name"},
+                "parent": {
+                    "type": "string",
+                    "description": "Parent for single collection (omit for scene root)",
+                },
+                "collections": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "parent": {"type": "string"},
+                        },
+                        "required": ["name"],
+                    },
+                    "description": "List of {name, parent?}",
+                },
+            },
+            "required": [],
+        },
+        category="Blender",
+    )
+
+    # move_to_collection
+
+    mcp_tools.register_tool(
+        "move_to_collection",
+        move_to_collection,
+        "Move objects to a collection; can create the target when missing.",
+        {
+            "type": "object",
+            "properties": {
+                "object_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Object names to move",
+                },
+                "collection_name": {
+                    "type": "string",
+                    "description": "Target collection name",
+                },
+                "unlink_from_others": {
+                    "type": "boolean",
+                    "description": "Unlink from other collections",
+                    "default": True,
+                },
+                "create_if_missing": {
+                    "type": "boolean",
+                    "description": "Create target if missing",
+                    "default": True,
+                },
+            },
+            "required": ["object_names", "collection_name"],
+        },
+        category="Blender",
+    )
+
+    # set_collection_color (now supports batch via 'collection_names')
+    mcp_tools.register_tool(
+        "set_collection_color",
+        set_collection_color,
+        "Set collection color tag (Blender 4.2+). Accepts single name or list.",
+        {
+            "type": "object",
+            "properties": {
+                "collection_name": {
+                    "type": "string",
+                    "description": "Single collection name",
+                },
+                "collection_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of collections",
+                },
+                "color_tag": {
+                    "type": "string",
+                    "description": "COLOR_01..COLOR_08 or NONE",
+                    "enum": [
+                        "COLOR_01",
+                        "COLOR_02",
+                        "COLOR_03",
+                        "COLOR_04",
+                        "COLOR_05",
+                        "COLOR_06",
+                        "COLOR_07",
+                        "COLOR_08",
+                        "NONE",
+                    ],
+                    "default": "COLOR_01",
+                },
+            },
+            "required": [],
+        },
+        category="Blender",
+    )
+
+    mcp_tools.register_tool(
+        "delete_collection",
+        delete_collection,
+        "Delete a collection. Optionally delete all objects within it.",
+        {
+            "type": "object",
+            "properties": {
+                "collection_name": {
+                    "type": "string",
+                    "description": "Collection to delete",
+                },
+                "delete_objects": {
+                    "type": "boolean",
+                    "description": "Also delete objects",
+                    "default": False,
+                },
+            },
+            "required": ["collection_name"],
+        },
+        category="Blender",
+    )
+
     mcp_tools.register_tool(
         "assistant_help",
         assistant_help,
-        "Return JSON Schemas for one or more assistant_sdk tool aliases (e.g., 'polyhaven.search').",
+        "Return JSON Schemas for one or more assistant_sdk tool methods (e.g., 'polyhaven.search').",
         {
             "type": "object",
             "properties": {
                 "tool": {
                     "type": "string",
-                    "description": "Single SDK alias or MCP tool name (e.g., 'polyhaven.search', 'get_scene_info')",
+                    "description": "Single SDK method name or MCP tool name (e.g., 'polyhaven.search', 'get_scene_info')",
                 },
                 "tools": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of SDK aliases or MCP tool names",
+                    "description": "List of SDK method names or MCP tool names",
                 },
             },
             "required": [],

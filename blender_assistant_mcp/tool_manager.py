@@ -19,24 +19,14 @@ class ToolManager:
             "execute_code",
             "get_scene_info",
             "get_object_info",
-            "list_collections",
-            "get_collection_info",
-            "get_selection",
-            "get_active",
             "assistant_help",
+            "search_memory",
+            "capture_viewport_for_vision",
+            "rag_query",
         }
         
-        # Tools that are enabled by default in the "lean" profile
-        self.default_tools: Set[str] = self.core_tools | {
-            "create_collection",
-            "move_to_collection",
-            "set_collection_color",
-            "delete_collection",
-            "set_selection",
-            "set_active",
-            "select_by_type",
-            "capture_viewport_for_vision",
-        }
+        # Default tools are now just the core tools (strict SDK-first approach)
+        self.default_tools: Set[str] = self.core_tools.copy()
 
     def get_enabled_tools(self, preferences=None) -> Set[str]:
         """Get the set of enabled tools based on preferences."""
@@ -77,35 +67,72 @@ class ToolManager:
 
     def get_system_prompt_hints(self, enabled_tools: Set[str]) -> str:
         """Generate SDK hints for tools that are NOT enabled natively."""
-        all_tool_names = {t.get("name") for t in mcp_tools.get_tools_list()}
+        all_tools = mcp_tools.get_tools_list()
         
-        # Identify which domains are missing from native tools
+        # Group hidden tools by category
+        hidden_by_category: Dict[str, List[str]] = {}
+        
+        for t in all_tools:
+            name = t.get("name")
+            if name not in enabled_tools:
+                cat = t.get("category", "Other")
+                if cat not in hidden_by_category:
+                    hidden_by_category[cat] = []
+                hidden_by_category[cat].append(name)
+                
+        if not hidden_by_category:
+            return ""
+
         hints = []
         
-        def _is_missing(names: List[str]) -> bool:
-            return not any(n in enabled_tools for n in names)
-
-        # Check specific domains
-        if _is_missing(["create_object", "modify_object", "delete_object", "set_material"]):
-            hints.append("- assistant_sdk.blender.* — scene/objects/collections/selection")
-            
-        if _is_missing(["search_polyhaven_assets", "download_polyhaven"]):
-            hints.append("- assistant_sdk.polyhaven.search/download — PolyHaven assets")
-            
-        if _is_missing(["search_stock_photos", "download_stock_photo"]):
-            hints.append("- assistant_sdk.stock_photos.search/download — Pexels/Unsplash (API keys)")
-            
-        if _is_missing(["sketchfab_login", "sketchfab_search", "sketchfab_download_model"]):
-            hints.append("- assistant_sdk.sketchfab.login/search/download — Sketchfab")
-            
-        if _is_missing(["web_search"]):
-            hints.append("- assistant_sdk.web.search — web results")
-            
-        if _is_missing(["rag_query", "rag_get_stats"]):
-            hints.append("- assistant_sdk.rag.query/get_stats — Blender docs RAG")
-
-        if not hints:
-            return ""
+        # Map categories to SDK namespaces and descriptions
+        cat_map = {
+            "Blender": ("assistant_sdk.blender", "scene/objects/collections/selection"),
+            "PolyHaven": ("assistant_sdk.polyhaven", "PolyHaven assets"),
+            "Stock Photos": ("assistant_sdk.stock_photos", "Pexels/Unsplash"),
+            "Sketchfab": ("assistant_sdk.sketchfab", "Sketchfab models"),
+            "Web": ("assistant_sdk.web", "Web search/download"),
+            "RAG": ("assistant_sdk.rag", "Blender docs RAG"),
+            "Memory": ("assistant_sdk.memory", "Long-term memory"),
+            "Vision": ("assistant_sdk.vision", "Vision analysis"),
+        }
+        
+        for cat, tools in hidden_by_category.items():
+            if cat in cat_map:
+                namespace, desc = cat_map[cat]
+                # Simplify tool names for the hint (remove namespace prefix if present, though names are usually flat)
+                # We just list the namespace and a generic description, or maybe a few key verbs?
+                # The original hints were like "assistant_sdk.polyhaven.search/download".
+                # Let's try to infer verbs from tool names (e.g. "search_polyhaven" -> "search")
+                
+                verbs = set()
+                for t in tools:
+                    # heuristic: extract verb from tool name (e.g. "create_object" -> "create")
+                    parts = t.split("_")
+                    if parts:
+                        # Handle special cases or just take the first/last part?
+                        # "search_polyhaven_assets" -> "search"
+                        # "download_stock_photo" -> "download"
+                        # "web_search" -> "search"
+                        # "rag_query" -> "query"
+                        
+                        # Common verbs
+                        if "search" in t: verbs.add("search")
+                        elif "download" in t: verbs.add("download")
+                        elif "create" in t: verbs.add("create")
+                        elif "get" in t: verbs.add("get")
+                        elif "set" in t: verbs.add("set")
+                        elif "delete" in t: verbs.add("delete")
+                        elif "query" in t: verbs.add("query")
+                        elif "fetch" in t: verbs.add("fetch")
+                        elif "login" in t: verbs.add("login")
+                        else: verbs.add(parts[0]) # Fallback
+                
+                verb_str = "/".join(sorted(list(verbs)))
+                hints.append(f"- {namespace}.{verb_str} — {desc}")
+            else:
+                # Fallback for unknown categories
+                hints.append(f"- assistant_sdk.{cat.lower()}.* — {', '.join(tools[:3])}...")
 
         return "\nSDK Hints (use assistant_help for exact usage):\n" + "\n".join(hints) + "\n"
 

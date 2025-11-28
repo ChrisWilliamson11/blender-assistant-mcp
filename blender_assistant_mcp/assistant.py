@@ -13,17 +13,52 @@ from .tool_manager import ToolManager
 from . import ollama_adapter as llama_manager
 
 # Global session state
-_session: AssistantSession = None
+_sessions: dict[str, AssistantSession] = {}
 _stop_requested = False
 
 def get_session(context) -> AssistantSession:
-    """Get or create the global assistant session."""
-    global _session
-    if _session is None:
+    """Get or create the assistant session for the active chat tab."""
+    global _sessions
+    
+    wm = context.window_manager
+    idx = wm.assistant_active_chat_index
+    
+    # Ensure index is valid
+    if idx < 0 or idx >= len(wm.assistant_chat_sessions):
+        # Fallback if no sessions exist (shouldn't happen in modal but safe to handle)
+        if not wm.assistant_chat_sessions:
+            return None
+        idx = 0
+        
+    session_ui = wm.assistant_chat_sessions[idx]
+    session_id = session_ui.session_id
+    
+    # If session_id is empty (legacy/bug), generate one
+    if not session_id:
+        import uuid
+        session_id = str(uuid.uuid4())
+        session_ui.session_id = session_id
+        
+    if session_id not in _sessions:
         prefs = context.preferences.addons[__package__].preferences
         model_name = getattr(prefs, "model_file", "qwen2.5-coder:7b")
-        _session = AssistantSession(model_name, ToolManager())
-    return _session
+        _sessions[session_id] = AssistantSession(model_name, ToolManager())
+        
+    return _sessions[session_id]
+
+def get_schema_tools() -> list[str]:
+    """Get list of enabled tool names for debug UI."""
+    # Create a temporary tool manager to check enabled tools
+    tm = ToolManager()
+    # Note: We are not passing prefs here, so this returns default tools.
+    # Ideally we should pass context/prefs if possible, but for debug log this is okay.
+    return list(tm.get_enabled_tools())
+
+def reset_session(session_id: str):
+    """Reset a specific session (e.g. on new chat or delete)."""
+    global _sessions
+    if session_id in _sessions:
+        del _sessions[session_id]
 
 class ASSISTANT_OT_stop(bpy.types.Operator):
     """Stop the current assistant operation"""
@@ -92,7 +127,6 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         
         # Ensure we have an active session
         if not wm.assistant_chat_sessions:
-            if not wm.assistant_chat_sessions:
                 # Create default session if none exists
                 bpy.ops.assistant.new_chat()
                 
@@ -115,8 +149,9 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             # For now, we rely on the role being "Tool" and content being the result.
             pass
             
-        # Scroll to bottom
-        wm.assistant_chat_message_index = len(active_session.messages) - 1
+        # Scroll to bottom only for primary conversation items
+        if role in {"You", "System", "Assistant"}:
+            wm.assistant_chat_message_index = len(active_session.messages) - 1
         
         # Force redraw
         for area in bpy.context.screen.areas:
@@ -147,6 +182,16 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         ASSISTANT_OT_send._is_running = True
         
         session = get_session(context)
+        
+        if session is None:
+            # No session exists, try to create one
+            bpy.ops.assistant.new_chat()
+            session = get_session(context)
+            
+            if session is None:
+                self.report({"ERROR"}, "Failed to create assistant session")
+                ASSISTANT_OT_send._is_running = False
+                return {"CANCELLED"}
         
         # Ensure watcher is initialized
         if not session.scene_watcher._initialized:
@@ -209,7 +254,10 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                     
                     if self._response:
                         # Process response
-                        tool_calls = session.process_response(self._response)
+                        tool_calls, thinking = session.process_response(self._response)
+                        
+                        if thinking:
+                            self._add_message("Thinking", thinking)
                         
                         # Add assistant message to UI
                         msg = self._response.get("message", {})
@@ -224,6 +272,8 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                             # Let's wait for next timer tick to keep UI responsive
                         else:
                             # No tools, we are done
+                            if not content:
+                                self._add_message("System", "Task Completed.")
                             return self._finish(context)
                     else:
                         self._add_message("Error", "No response from model")
@@ -260,16 +310,6 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             context.window_manager.event_timer_remove(self._timer)
         return {"FINISHED"}
 
-def get_schema_tools():
-    """Get the list of enabled tools for debug/UI purposes."""
-    # Create a temporary session or tool manager to get default tools
-    # Ideally we should get this from the active session if it exists
-    if _session:
-        return list(_session.enabled_tools)
-    else:
-        # Fallback to defaults
-        tm = ToolManager()
-        return list(tm.default_tools)
 
 def register():
     bpy.utils.register_class(ASSISTANT_OT_stop)

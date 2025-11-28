@@ -164,7 +164,7 @@ def select_by_type(object_type: str) -> dict:
         return {"error": f"Failed to select by type: {str(e)}"}
 
 
-def register_tools():
+def register():
     """Register all selection tools with the MCP registry."""
     
     mcp_tools.register_tool(

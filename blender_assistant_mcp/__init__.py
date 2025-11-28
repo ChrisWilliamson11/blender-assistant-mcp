@@ -23,23 +23,31 @@ bl_info = {
 # Import modules
 from . import (
     assistant,
+    blender_tools,
     mcp_tools,
     polyhaven_tools,
     preferences,
+    rag_tools,
     selection_tools,
+    sketchfab_tools,
     stock_photo_tools,
     ui,
+    web_tools,
     memory_tools,
 )
 
 # Module list for registration
 _modules = [
     mcp_tools,
+    blender_tools,
     polyhaven_tools,
     preferences,
+    rag_tools,
     selection_tools,
+    sketchfab_tools,
     stock_photo_tools,
     ui,
+    web_tools,
     memory_tools,
     assistant,
 ]

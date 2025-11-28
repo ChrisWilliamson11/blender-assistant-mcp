@@ -66,7 +66,7 @@ def search_polyhaven_assets(asset_type: str, query: str = "", limit: int = 10) -
             filtered = {
                 k: v
                 for k, v in assets.items()
-                if any(
+                if all(
                     word in k.lower()
                     or word in v.get("name", "").lower()
                     or any(word in cat.lower() for cat in v.get("categories", []))
@@ -268,7 +268,7 @@ def download_polyhaven_hdri(
             "file_path": file_path,
             "asset_id": asset_id,
             "resolution": resolution,
-            "message": f"Downloaded and loaded HDRI: {asset_id} ({resolution})",
+            "message": f"Downloaded and loaded HDRI: {asset_id} ({resolution}) from {file_path}",
         }
 
     except Exception as e:
@@ -600,7 +600,7 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
                 "asset_id": asset_id,
                 "resolution": resolution,
                 "applied_to": obj.name,
-                "message": f"✓ Applied {asset_id} to '{obj.name}'. This object is now complete - do not apply to it again.",
+                "message": f"✓ Applied {asset_id} to '{obj.name}'. Files saved to: {download_dir}",
             }
         else:
             return {
@@ -608,7 +608,7 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
                 "texture_maps": texture_maps,
                 "asset_id": asset_id,
                 "resolution": resolution,
-                "message": f"Downloaded PBR texture: {asset_id} ({resolution}). No active mesh object to apply to.",
+                "message": f"Downloaded PBR texture: {asset_id} ({resolution}) to {download_dir}. No active mesh object to apply to.",
             }
 
     except Exception as e:
@@ -905,7 +905,7 @@ def download_polyhaven(
         }
 
 
-def register_tools():
+def register():
     """Register all PolyHaven tools with the MCP registry."""
 
     mcp_tools.register_tool(

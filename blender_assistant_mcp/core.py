@@ -23,51 +23,69 @@ class ToolCall:
 class ResponseParser:
     """Parses LLM responses into structured tool calls."""
 
-# I will use multi_replace for better control
-    """Parses LLM responses into structured tool calls."""
-
-    @staticmethod
-    def parse(response: Dict[str, Any]) -> List[ToolCall]:
+    @classmethod
+    def parse(cls, response: Dict[str, Any]) -> List[ToolCall]:
         """Parse a raw LLM response dict into a list of ToolCall objects."""
-        tool_calls = []
-        
-        # 1. Check for native tool calls (OpenAI/Ollama format)
-        message = response.get("message", {})
-        if isinstance(message, dict):
-            native_calls = message.get("tool_calls", [])
-            if native_calls:
-                for call in native_calls:
-                    func = call.get("function", {})
-                    name = func.get("name")
-                    args = func.get("arguments", {})
-                    
-                    # Handle stringified JSON args
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except json.JSONDecodeError:
-                            # Try python literal eval as fallback
-                            try:
-                                args = ast.literal_eval(args)
-                            except:
-                                pass
-                                
-                    if name:
-                        tool_calls.append(ToolCall(tool=name, args=args if isinstance(args, dict) else {}))
-                return tool_calls
+        # 1. Native tool calls (OpenAI/Ollama format)
+        tool_calls = cls._parse_native_calls(response)
+        if tool_calls:
+            return tool_calls
 
-        # 2. Check for content-based tool calls (Thinking models / text fallback)
+        # 2. Content-based tool calls (Thinking models / text fallback)
+        message = response.get("message", {})
         content = message.get("content", "")
         if not content:
             return []
 
+        # Try JSON blocks
+        tool_calls = cls._parse_json_blocks(content)
+        if tool_calls:
+            return tool_calls
+
+        # 3. Fallback: Auto-wrap Python code blocks
+        return cls._parse_code_blocks(content)
+
+    @staticmethod
+    def _parse_native_calls(response: Dict[str, Any]) -> List[ToolCall]:
+        """Extract native tool calls from the response."""
+        tool_calls = []
+        message = response.get("message", {})
+        if not isinstance(message, dict):
+            return []
+
+        native_calls = message.get("tool_calls", [])
+        for call in native_calls:
+            func = call.get("function", {})
+            name = func.get("name")
+            args = func.get("arguments", {})
+            
+            # Handle stringified JSON args
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    # Try python literal eval as fallback
+                    try:
+                        args = ast.literal_eval(args)
+                    except:
+                        pass
+                        
+            if name:
+                tool_calls.append(ToolCall(tool=name, args=args if isinstance(args, dict) else {}))
+        
+        return tool_calls
+
+    @staticmethod
+    def _parse_json_blocks(content: str) -> List[ToolCall]:
+        """Extract tool calls from JSON blocks in markdown."""
+        tool_calls = []
+        
         # Try to extract JSON blocks from markdown
         json_blocks = re.findall(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL)
         
         # If no markdown blocks, look for raw JSON objects
         if not json_blocks:
             # Simple brace matching for standalone JSON
-            # This is a basic heuristic; for complex nesting it might fail but covers most LLM outputs
             matches = re.findall(r"(\{[\s\S]*?\})", content)
             for m in matches:
                 if '"name"' in m and '"arguments"' in m:
@@ -84,15 +102,21 @@ class ResponseParser:
                     tool_calls.append(ToolCall(tool=data["tool"], args=data["args"]))
             except json.JSONDecodeError:
                 pass
+                
+        return tool_calls
 
-        # 3. Fallback: Auto-wrap Python code blocks into execute_code
-        if not tool_calls:
-            code_blocks = re.findall(r"```(?:python)?\s*(.+?)\s*```", content, re.DOTALL | re.IGNORECASE)
-            for block in code_blocks:
-                if "import bpy" in block or "bpy." in block:
-                    tool_calls.append(ToolCall(tool="execute_code", args={"code": block}))
-                    break # Only take the first code block to avoid confusion
-
+    @staticmethod
+    def _parse_code_blocks(content: str) -> List[ToolCall]:
+        """Extract Python code blocks and wrap them in execute_code."""
+        tool_calls = []
+        code_blocks = re.findall(r"```(?:python)?\s*(.+?)\s*```", content, re.DOTALL | re.IGNORECASE)
+        
+        for block in code_blocks:
+            # Heuristic: Only treat as code execution if it looks like Blender API usage
+            if "import bpy" in block or "bpy." in block:
+                tool_calls.append(ToolCall(tool="execute_code", args={"code": block}))
+                break # Only take the first code block to avoid confusion
+                
         return tool_calls
 
 class AssistantSession:
@@ -106,8 +130,6 @@ class AssistantSession:
         self.history: List[Dict[str, str]] = []
         self.tool_queue: List[ToolCall] = []
         self.state = "IDLE" # IDLE, THINKING, EXECUTING, DONE
-        self.max_iterations = 15
-        self.current_iteration = 0
         self.last_error = None
         
         # Load enabled tools
@@ -144,10 +166,13 @@ class AssistantSession:
             "MEMORY\n"
             f"{memory_context}\n\n"
             "BEHAVIOR\n"
-            "- Prefer native tools when they map to your task.\n"
-            "- Use 'execute_code' for custom logic or complex operations not covered by tools.\n"
-            "- Always verify your actions (e.g., check if objects were created).\n"
-            "- If a tool fails, try a different approach or use Python code.\n\n"
+            "- **PLAN FIRST**: If a request is complex, briefly plan before executing.\n"
+            "- **SDK FIRST**: `assistant_sdk.*` methods are NOT native tools. You MUST call them inside `execute_code`.\n"
+            "- **NO HALLUCINATIONS**: Do not invent tools. Use `assistant_help` to find real SDK methods.\n"
+            "- **IDEMPOTENCY**: Check if objects exist before creating them.\n"
+            "- **SCENE AWARENESS**: Pay attention to 'SCENE UPDATES'.\n"
+            "- **VERIFY**: Always verify your actions.\n"
+            "- **LEARN**: Use `remember_learning` to record pitfalls or version quirks.\n\n"
             "TOOLS\n"
             f"{compact_tools}\n"
             f"{sdk_hints}"
@@ -159,16 +184,28 @@ class AssistantSession:
         message = response.get("message", {})
         content = message.get("content", "")
         thinking = message.get("thinking", "")
+        tool_calls = message.get("tool_calls", [])
         
         if thinking:
             # We don't add thinking to history to save context, but we could log it
             pass
             
-        if content:
-            self.add_message("assistant", content)
-
         # Parse tools
         calls = ResponseParser.parse(response)
+        
+        # Add assistant message to history if there is content OR tool calls
+        # Note: We store the raw tool_calls in the history for the API to see
+        if content or tool_calls:
+            # If we have native tool calls, we should include them in the message object
+            # But add_message currently only takes content.
+            # We need to update add_message or manually append to history.
+            msg = {"role": "assistant", "content": content}
+            if tool_calls:
+                msg["tool_calls"] = tool_calls
+            self.history.append(msg)
+            # Prune history
+            if len(self.history) > 50:
+                self.history = self.history[-50:]
         
         # Queue valid calls
         valid_calls = []
@@ -176,10 +213,14 @@ class AssistantSession:
             if call.tool in self.enabled_tools or call.tool == "execute_code":
                 valid_calls.append(call)
             else:
-                # Tool not enabled/found
+                # Tool not enabled/found - Feedback to LLM is critical!
                 print(f"[Session] Warning: Tool '{call.tool}' not enabled or unknown.")
+                self.add_message(
+                    "user", 
+                    f"SYSTEM ERROR: Tool '{call.tool}' is not a native tool. You must use the Python SDK via `execute_code` instead. Check `assistant_help` for the correct SDK method signature."
+                )
                 
-        return valid_calls
+        return valid_calls, thinking
 
     def execute_next_tool(self) -> Dict[str, Any]:
         """Execute the next tool in the queue."""
@@ -190,10 +231,19 @@ class AssistantSession:
         
         try:
             print(f"[Session] Executing {call.tool} with {call.args}")
+            
+            # Execute tool
             result = mcp_tools.execute_tool(call.tool, call.args)
             
             # Add result to history
             self.add_message("tool", json.dumps(result), name=call.tool)
+            
+            # Check for scene side-effects immediately
+            # This ensures the LLM knows what changed *before* it generates the next step
+            changes = self.scene_watcher.consume_changes()
+            if changes:
+                self.add_message("system", f"SCENE UPDATES: {changes}")
+            
             return result
             
         except Exception as e:
