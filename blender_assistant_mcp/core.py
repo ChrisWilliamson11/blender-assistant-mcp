@@ -187,7 +187,7 @@ class AssistantSession:
         tool_calls = message.get("tool_calls", [])
         
         if thinking:
-            # We don't add thinking to history to save context, but we could log it
+            # We don't add thinking to history to save context,
             pass
             
         # Parse tools
@@ -197,8 +197,6 @@ class AssistantSession:
         # Note: We store the raw tool_calls in the history for the API to see
         if content or tool_calls:
             # If we have native tool calls, we should include them in the message object
-            # But add_message currently only takes content.
-            # We need to update add_message or manually append to history.
             msg = {"role": "assistant", "content": content}
             if tool_calls:
                 msg["tool_calls"] = tool_calls

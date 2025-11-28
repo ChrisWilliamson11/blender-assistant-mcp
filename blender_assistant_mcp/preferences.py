@@ -1769,12 +1769,6 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         settings_col.prop(self, "thinking_level")
 
 
-        # Planning exploration controls
-        settings_col.prop(self, "planning_exploration")
-        if self.planning_exploration:
-            settings_col.prop(self, "planning_temperature")
-        settings_col.prop(self, "max_iterations")
-
         # Advanced sampling (collapsible)
         settings_col.separator()
         settings_col.prop(

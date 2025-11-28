@@ -548,7 +548,16 @@ class _AssistantSDK:
         self.polyhaven = self._Polyhaven(mcp)
         self.blender = self._Blender(mcp)
         self.sketchfab = self._Sketchfab(mcp)
-        self.stock_photos = self._StockPhotos(mcp)
+        
+        # Only expose stock_photos if API keys are configured
+        try:
+            from .preferences import get_preferences
+            prefs = get_preferences()
+            if prefs and (prefs.unsplash_api_key or prefs.pexels_api_key):
+                self.stock_photos = self._StockPhotos(mcp)
+        except Exception:
+            pass  # No preferences or no API keys
+        
         self.web = self._Web(mcp)
         self.rag = self._RAG(mcp)
         self.memory = self._Memory(mcp)
@@ -568,11 +577,11 @@ class _AssistantSDK:
             "assistant_sdk quick reference; use assistant_help('assistant_sdk.<namespace>') for signatures\n"
             "- blender.* — scene/objects/collections/selection\n"
             "- polyhaven.search/download — PolyHaven assets (HDRIs, textures, models)\n"
-            "- stock_photos.search/download — Pexels/Unsplash images\n"
+            "- stock_photos.search/download — Pexels/Unsplash images (requires API keys)\n"
             "- sketchfab.login/search/download — Sketchfab models\n"
-            "- web.search/fetch_page/extract_images/download_image — general web tools\n"
+            "- web.search/fetch_page/extract_images/download_image — web tools (for images: search→extract→download)\n"
             "- rag.query/get_stats — Blender docs RAG (API/Manual)\n"
-            "- memory.remember_fact/remember_preference/remember_learning/search — Store long-term knowledge\n"
+            "- memory.remember_fact/remember_preference/remember_learning/search — long-term knowledge\n"
         )
 
     class _Polyhaven:
@@ -2449,13 +2458,30 @@ def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
             # Web
             "web.search": {
                 "sdkUsage": "assistant_sdk.web.search(query='query', num_results=5)",
-                "notes": "SDK (execute_code): Search the web (DuckDuckGo)."
+                "notes": "Search the web (DuckDuckGo). Returns web PAGES, not direct images."
             },
             "web.fetch": {
-                "sdkUsage": "assistant_sdk.web.fetch_page(url='url')",
-                "notes": "SDK (execute_code): Fetch webpage content as markdown."
+                "sdkUsage": "assistant_sdk.web.fetch_page(url='url', max_length=10000)",
+                "notes": "Fetch webpage content (text extraction)."
             },
-            "web.extract_image_urls": {
+            "web.extract_images": {
+                "sdkUsage": "assistant_sdk.web.extract_images(url='url', min_width=400, max_images=10)",
+                "notes": "Extract image URLs from a webpage. Returns {'images': ['url1', 'url2', ...]}."
+            },
+            "web.download_image": {
+                "sdkUsage": "assistant_sdk.web.download_image(image_url='url', apply_to_active=True, pack_image=True)",
+                "notes": "Download image from URL and apply as texture. Packs into .blend file."
+            },
+            "web.images_workflow": {
+                "workflow": [
+                    "# 3-STEP WORKFLOW for downloading web images:",
+                    "1. results = assistant_sdk.web.search(query='kittens')  # Get pages about kittens",
+                    "2. images = assistant_sdk.web.extract_images(results['results'][0]['url'])  # Extract image URLs",
+                    "3. assistant_sdk.web.download_image(images['images'][0])  # Download first image"
+                ],
+                "notes": "Multi-step process: SEARCH for pages → EXTRACT image URLs → DOWNLOAD the image."
+            },
+           "web.extract_image_urls": {
                 "sdkUsage": "assistant_sdk.web.extract_image_urls(url='url')",
                 "notes": "SDK (execute_code): Find image URLs on a page."
             },
