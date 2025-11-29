@@ -369,139 +369,241 @@ def download_image_as_texture(
 ) -> dict:
     """Download an image from a URL and optionally apply it as a texture.
 
+
+
     Args:
+
         image_url: Direct URL to the image
+
         apply_to_active: If True, apply as texture to active object (default: True)
+
         pack_image: If True, pack image into .blend file (default: True)
 
+
+
     Returns:
+
         Dictionary with download result and image name
+
     """
+
     try:
         import os
         import tempfile
         from urllib.parse import urlparse
 
         # Basic URL validation
+
         parsed = urlparse(image_url)
+
         if parsed.scheme not in ("http", "https"):
             return {
                 "error": "Invalid image_url: must be http(s) URL",
                 "received": image_url,
             }
 
+        # Prepare robust HTTP headers (helps avoid 403/521/CDN blocks)
+        ua = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+        referer = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else None
+        headers = {
+            "User-Agent": ua,
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        }
+        if referer:
+            headers["Referer"] = referer
+
         # Download image
-        with httpx.Client() as client:
-            response = client.get(image_url, timeout=30.0, follow_redirects=True)
+        with httpx.Client(follow_redirects=True) as client:
+            response = client.get(image_url, timeout=30.0, headers=headers)
             response.raise_for_status()
 
             # Determine file extension from URL or content-type
-            content_type = response.headers.get("content-type", "")
+
+            content_type = (response.headers.get("content-type") or "").lower()
             if "jpeg" in content_type or "jpg" in content_type:
                 ext = ".jpg"
+
             elif "png" in content_type:
                 ext = ".png"
+
             elif "webp" in content_type:
                 ext = ".webp"
+
             else:
                 # Try to get from URL
-                ext = os.path.splitext(image_url.split("?")[0])[1]
-                if not ext or ext not in [
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".webp",
-                    ".bmp",
-                    ".tga",
-                ]:
+
+                ext = os.path.splitext(image_url.split("?")[0])[1].lower()
+
+                if ext not in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tga"]:
                     ext = ".jpg"  # Default
 
             # Save to temp file
+
             temp_dir = tempfile.gettempdir()
+
             temp_file = os.path.join(temp_dir, f"web_image_{hash(image_url)}{ext}")
 
             with open(temp_file, "wb") as f:
                 f.write(response.content)
 
-        # Load image into Blender
+        # Load image into Blender (fail fast if Blender cannot load)
+
         image_name = f"WebImage_{hash(image_url)}"
 
-        # Check if image already exists
+        # Remove any stale with same name
         if image_name in bpy.data.images:
-            bpy.data.images.remove(bpy.data.images[image_name])
+            try:
+                bpy.data.images.remove(bpy.data.images[image_name])
 
-        img = bpy.data.images.load(temp_file)
+            except Exception:
+                pass
+
+        try:
+            img = bpy.data.images.load(temp_file)
+
+        except Exception as load_err:
+            # Clean up temp file if load fails
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
+            return {
+                "error": f"Blender failed to load image file: {str(load_err)}",
+                "source_url": image_url,
+                "content_type": content_type,
+                "temp_file": temp_file,
+            }
 
         img.name = image_name
 
-        # Pack image if requested
-        if pack_image:
-            img.pack()
-            # Can now delete temp file
+        # Validate the loaded image (width/height must be non-zero)
+        try:
+            w, h = int(img.size[0]), int(img.size[1])
+        except Exception:
+            w, h = 0, 0
+        if w <= 0 or h <= 0:
+            # Remove invalid image datablock to avoid confusion with "Render Result"
+            try:
+                bpy.data.images.remove(img)
+            except Exception:
+                pass
             try:
                 os.remove(temp_file)
-            except:
+
+            except Exception:
+                pass
+
+            return {
+                "error": "Loaded image has invalid size (0x0).",
+                "source_url": image_url,
+                "content_type": content_type,
+                "temp_file": temp_file,
+            }
+
+        # Pack image if requested
+        if pack_image:
+            try:
+                img.pack()
+                # Can now delete temp file
+                try:
+                    os.remove(temp_file)
+                except Exception:
+                    pass
+            except Exception as pack_err:
+                # Packing failed; still continue but report
                 pass
 
         result = {
             "success": True,
             "image_name": image_name,
-            "packed": pack_image,
-            "size": f"{img.size[0]}x{img.size[1]}",
+            "packed": bool(pack_image),
+            "size": f"{w}x{h}",
+            "source_url": image_url,
         }
 
         # Apply as texture if requested
+
         if apply_to_active:
             obj = bpy.context.active_object
 
             if obj and obj.type == "MESH":
                 # Create material if needed
+
                 if not obj.data.materials:
                     mat = bpy.data.materials.new(name=f"Material_{obj.name}")
+
                     mat.use_nodes = True
+
                     obj.data.materials.append(mat)
+
                 else:
                     mat = obj.data.materials[0]
+
                     if not mat.use_nodes:
                         mat.use_nodes = True
 
                 # Get nodes
+
                 nodes = mat.node_tree.nodes
+
                 links = mat.node_tree.links
 
                 # Find or create Principled BSDF
+
                 bsdf = None
+
                 for node in nodes:
                     if node.type == "BSDF_PRINCIPLED":
                         bsdf = node
+
                         break
 
                 if not bsdf:
                     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
 
                 # Create image texture node
+
                 tex_node = nodes.new("ShaderNodeTexImage")
+
                 tex_node.image = img
+
                 tex_node.location = (bsdf.location[0] - 300, bsdf.location[1])
 
                 # Connect to Base Color
+
                 links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])
 
                 result["applied_to"] = obj.name
+
                 result["material"] = mat.name
+
                 result["message"] = (
                     f"✓ Downloaded and applied image to '{obj.name}' (packed: {pack_image})"
                 )
+
             else:
                 result["applied_to"] = None
+
                 result["message"] = (
                     f"✓ Downloaded image '{image_name}' (no active mesh to apply to)"
                 )
+
         else:
             result["message"] = f"✓ Downloaded image '{image_name}' (not applied)"
 
         return result
 
+    except httpx.TimeoutException:
+        return {"error": f"Request timed out while fetching {image_url}"}
+    except httpx.HTTPStatusError as e:
+        return {
+            "error": f"HTTP error {e.response.status_code} while fetching {image_url}",
+            "status_code": e.response.status_code,
+        }
     except Exception as e:
         return {"error": f"Failed to download image: {str(e)}"}
 

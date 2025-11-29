@@ -15,6 +15,7 @@ from .memory import MemoryManager
 
 _memory_manager = None
 
+
 def get_memory_manager():
     global _memory_manager
     if _memory_manager is None:
@@ -410,42 +411,43 @@ def get_object_info(name: str) -> dict:
     # Data block info
     if obj.data:
         info["data"] = {"name": obj.data.name}
-        
+
         # Mesh specific
-        if obj.type == 'MESH':
+        if obj.type == "MESH":
             mesh = obj.data
             info["data"]["vertices"] = len(mesh.vertices)
             info["data"]["polygons"] = len(mesh.polygons)
-            info["data"]["shape_keys"] = [k.name for k in mesh.shape_keys.key_blocks] if mesh.shape_keys else []
-            
+            info["data"]["shape_keys"] = (
+                [k.name for k in mesh.shape_keys.key_blocks] if mesh.shape_keys else []
+            )
+
             # Vertex Groups
             info["vertex_groups"] = [vg.name for vg in obj.vertex_groups]
 
     # Materials
     info["materials"] = []
     for slot in obj.material_slots:
-        mat_info = {"slot": slot.name, "material": slot.material.name if slot.material else None}
+        mat_info = {
+            "slot": slot.name,
+            "material": slot.material.name if slot.material else None,
+        }
         info["materials"].append(mat_info)
 
     # Modifiers
     info["modifiers"] = []
     for mod in obj.modifiers:
-        info["modifiers"].append({
-            "name": mod.name,
-            "type": mod.type,
-            "enabled": mod.show_viewport
-        })
+        info["modifiers"].append(
+            {"name": mod.name, "type": mod.type, "enabled": mod.show_viewport}
+        )
 
     # Constraints
     info["constraints"] = []
     for const in obj.constraints:
-        info["constraints"].append({
-            "name": const.name,
-            "type": const.type,
-            "enabled": const.enabled
-        })
-        
-    # Animation
+        info["constraints"].append(
+            {"name": const.name, "type": const.type, "enabled": const.enabled}
+        )
+
+        # Animation
         info["action"] = obj.animation_data.action.name
 
     return info
@@ -461,8 +463,8 @@ def _get_code_namespace():
     global _CODE_NAMESPACE
 
     if _CODE_NAMESPACE is None:
-        import mathutils
         import bmesh
+        import mathutils
         import numpy as np
 
         try:
@@ -496,45 +498,54 @@ def _get_code_namespace():
             import types
 
             sdk_obj = _CODE_NAMESPACE["assistant_sdk"]
-            
+
             def _create_shim_module(name, obj):
                 """Recursively create a module shim for an object."""
                 mod = types.ModuleType(name)
-                
+
                 # Copy attributes
                 for attr in dir(obj):
                     if not attr.startswith("_"):
                         val = getattr(obj, attr)
                         setattr(mod, attr, val)
-                        
-                        # If attribute is a class/object with its own attributes, 
+
+                        # If attribute is a class/object with its own attributes,
                         # create a submodule for it too (for 'from X.Y import Z')
-                        if hasattr(val, "__dict__") and not isinstance(val, (int, float, str, bool, list, dict, tuple)):
-                             # Check if it looks like a namespace/class we want to expose as a module
-                             pass
+                        if hasattr(val, "__dict__") and not isinstance(
+                            val, (int, float, str, bool, list, dict, tuple)
+                        ):
+                            # Check if it looks like a namespace/class we want to expose as a module
+                            pass
 
                 return mod
 
             # 1. Create top-level assistant_sdk module
             _as_mod = _create_shim_module("assistant_sdk", sdk_obj)
             sys.modules["assistant_sdk"] = _as_mod
-            
+
             # 2. Create submodules for each tool category (blender, polyhaven, etc.)
-            for category in ["blender", "polyhaven", "sketchfab", "stock_photos", "web", "rag"]:
+            for category in [
+                "blender",
+                "polyhaven",
+                "sketchfab",
+                "stock_photos",
+                "web",
+                "rag",
+            ]:
                 if hasattr(sdk_obj, category):
                     cat_obj = getattr(sdk_obj, category)
                     cat_mod_name = f"assistant_sdk.{category}"
-                    
+
                     # Create the submodule
                     cat_mod = _create_shim_module(cat_mod_name, cat_obj)
                     sys.modules[cat_mod_name] = cat_mod
-                    
+
                     # Link it to the parent
                     setattr(_as_mod, category, cat_mod)
 
             # Bind module into namespace so 'import assistant_sdk' works inside exec()
             _CODE_NAMESPACE["assistant_sdk"] = _as_mod
-            
+
         except Exception as e:
             print(f"[Assistant] Failed to create SDK shim: {e}")
             # Best-effort; if this fails, direct namespace access still works
@@ -548,21 +559,18 @@ class _AssistantSDK:
         self.polyhaven = self._Polyhaven(mcp)
         self.blender = self._Blender(mcp)
         self.sketchfab = self._Sketchfab(mcp)
-        
+        self.web = self._Web(mcp)
+        self.rag = self._RAG(mcp)
+        self.memory = self._Memory(mcp)
         # Only expose stock_photos if API keys are configured
         try:
             from .preferences import get_preferences
+
             prefs = get_preferences()
             if prefs and (prefs.unsplash_api_key or prefs.pexels_api_key):
                 self.stock_photos = self._StockPhotos(mcp)
         except Exception:
             pass  # No preferences or no API keys
-        
-        self.web = self._Web(mcp)
-        self.rag = self._RAG(mcp)
-        self.memory = self._Memory(mcp)
-
-        # SDK quick reference methods moved to class scope
 
     def call(self, name: str, **kwargs):
         return mcp_tools.execute_tool(name, kwargs)
@@ -906,7 +914,7 @@ class _AssistantSDK:
             try:
                 # Convert type to uppercase
                 obj_type = type.upper()
-                
+
                 # Handle mesh primitives
                 if obj_type == "CUBE":
                     bpy.ops.mesh.primitive_cube_add(location=location or (0, 0, 0))
@@ -922,7 +930,7 @@ class _AssistantSDK:
                     bpy.ops.mesh.primitive_torus_add(location=location or (0, 0, 0))
                 elif obj_type == "MONKEY":
                     bpy.ops.mesh.primitive_monkey_add(location=location or (0, 0, 0))
-                
+
                 # Handle other types
                 elif obj_type == "TEXT":
                     bpy.ops.object.text_add(location=location or (0, 0, 0))
@@ -931,19 +939,21 @@ class _AssistantSDK:
                 elif obj_type == "CAMERA":
                     bpy.ops.object.camera_add(location=location or (0, 0, 0))
                 elif obj_type == "LIGHT":
-                    bpy.ops.object.light_add(type="POINT", location=location or (0, 0, 0))
+                    bpy.ops.object.light_add(
+                        type="POINT", location=location or (0, 0, 0)
+                    )
                 else:
                     return {"error": f"Unknown object type: {type}"}
 
                 obj = bpy.context.active_object
                 if name:
                     obj.name = name
-                
+
                 if rotation:
                     obj.rotation_euler = rotation
                 if scale:
                     obj.scale = scale
-                    
+
                 return {"success": True, "name": obj.name, "type": obj.type}
             except Exception as e:
                 return {"error": f"Failed to create object: {str(e)}"}
@@ -965,19 +975,23 @@ class _AssistantSDK:
                 if name:
                     # Single object mode
                     item = {"name": name}
-                    if location is not None: item["location"] = location
-                    if rotation is not None: item["rotation"] = rotation
-                    if scale is not None: item["scale"] = scale
-                    if visible is not None: item["visible"] = visible
+                    if location is not None:
+                        item["location"] = location
+                    if rotation is not None:
+                        item["rotation"] = rotation
+                    if scale is not None:
+                        item["scale"] = scale
+                    if visible is not None:
+                        item["visible"] = visible
                     targets.append(item)
-                
+
                 modified = []
                 for item in targets:
                     obj_name = item.get("name")
                     obj = bpy.data.objects.get(obj_name)
                     if not obj:
                         continue
-                        
+
                     if "location" in item:
                         obj.location = item["location"]
                     if "rotation" in item:
@@ -987,9 +1001,9 @@ class _AssistantSDK:
                     if "visible" in item:
                         obj.hide_viewport = not item["visible"]
                         obj.hide_render = not item["visible"]
-                        
+
                     modified.append(obj.name)
-                    
+
                 return {"success": True, "modified": modified}
             except Exception as e:
                 return {"error": f"Failed to modify objects: {str(e)}"}
@@ -1002,14 +1016,14 @@ class _AssistantSDK:
                     targets.extend(names)
                 if name:
                     targets.append(name)
-                
+
                 deleted = []
                 for obj_name in targets:
                     obj = bpy.data.objects.get(obj_name)
                     if obj:
                         bpy.data.objects.remove(obj, do_unlink=True)
                         deleted.append(obj_name)
-                        
+
                 return {"success": True, "deleted": deleted}
             except Exception as e:
                 return {"error": f"Failed to delete objects: {str(e)}"}
@@ -1028,10 +1042,10 @@ class _AssistantSDK:
                     targets.extend(object_names)
                 if object_name:
                     targets.append(object_name)
-                
+
                 if not targets:
                     return {"error": "No objects specified"}
-                
+
                 # Get or create material
                 mat = None
                 if material_name:
@@ -1039,13 +1053,13 @@ class _AssistantSDK:
                     if not mat:
                         mat = bpy.data.materials.new(name=material_name)
                         mat.use_nodes = True
-                
+
                 # If color provided, update material (or create temp one if no name)
                 if color:
                     if not mat:
                         mat = bpy.data.materials.new(name="Material")
                         mat.use_nodes = True
-                    
+
                     # Set base color on Principled BSDF
                     if mat.node_tree:
                         bsdf = None
@@ -1055,16 +1069,16 @@ class _AssistantSDK:
                                 break
                         if not bsdf:
                             bsdf = mat.node_tree.nodes.new("ShaderNodeBsdfPrincipled")
-                        
+
                         # Handle 3-tuple or 4-tuple color
                         c = list(color)
                         if len(c) == 3:
                             c.append(1.0)
                         bsdf.inputs["Base Color"].default_value = c
-                
+
                 if not mat:
                     return {"error": "No material name or color specified"}
-                
+
                 # Assign to objects
                 assigned = []
                 for obj_name in targets:
@@ -1075,10 +1089,11 @@ class _AssistantSDK:
                         else:
                             obj.data.materials[0] = mat
                         assigned.append(obj_name)
-                        
+
                 return {"success": True, "material": mat.name, "assigned_to": assigned}
             except Exception as e:
                 return {"error": f"Failed to set material: {str(e)}"}
+
         def get_active(self):
             """Get the active object name (if any)."""
             return mcp_tools.execute_tool("get_active", {})
@@ -1468,10 +1483,13 @@ def _get_assistant_sdk():
     except Exception as e:
         print(f"[Assistant] CRITICAL: Failed to initialize assistant_sdk: {e}")
         import traceback
+
         traceback.print_exc()
+
         # Return a minimal stub so code doesn't crash entirely
         class _StubSDK:
             pass
+
         return _StubSDK()
 
 
@@ -1487,10 +1505,16 @@ def execute_code(code: str) -> dict:
     - assistant_sdk: Pre-initialized SDK for tools (blender, polyhaven, sketchfab, stock_photos, web, rag)
     - Any variables/functions you define persist between calls
 
-    **BEST PRACTICE**: Use `assistant_sdk.blender.*` methods (e.g., `assistant_sdk.blender.move_to_collection`) 
-    instead of writing raw `bpy` logic for common tasks. They are safer and handle edge cases.
 
-    IMPORTANT: assistant_sdk is already available in the namespace. Do NOT import it!
+    **BEST PRACTICE**: Use `assistant_sdk.<namespace>.*` methods (e.g., `assistant_sdk.blender.move_to_collection`)
+
+    instead of writing raw `bpy` logic for common tasks. Call methods directly via `assistant_sdk` and avoid importing submodules (e.g., do NOT use `from assistant_sdk.web import search`). They are safer and handle edge cases.
+
+
+
+    IMPORTANT: assistant_sdk is already available in the namespace. Do NOT import it, and do NOT import its submodules.
+    Always call via `assistant_sdk.web.search(...)`, `assistant_sdk.web.download_image(...)`, `assistant_sdk.blender.create_object(...)`, etc. Importing like `from assistant_sdk.web import search` is not supported with the runtime shim and can fail or produce stale references.
+
 
     Examples:
         # Use assistant_sdk (already available, no import needed!)
@@ -2357,8 +2381,6 @@ def delete_collection(collection_name: str, delete_objects: bool = False) -> dic
         return {"error": f"Failed to delete collection: {str(e)}"}
 
 
-
-
 def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
     """Return usage information for assistant_sdk tools.
 
@@ -2372,189 +2394,206 @@ def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
             queries.extend([str(t).strip() for t in tools if str(t).strip()])
         if tool and str(tool).strip():
             queries.append(str(tool).strip())
-            
+
         if not queries:
             return {"error": "Missing 'tool' or 'tools' parameter"}
 
         # Define the knowledge base of SDK tools
-        # Format: alias -> {sdkUsage, notes}
+        # Format: alias -> {sdkUsage, notes, returns?}
         sdk_docs = {
             # PolyHaven
             "polyhaven.search": {
                 "sdkUsage": "assistant_sdk.polyhaven.search(asset_type='hdri'|'texture'|'model', query='', limit=10)",
-                "notes": "Returns dict with 'assets' list. Iterate results['assets'] to find items."
+                "notes": "Returns dict with 'assets' list. Iterate results['assets'] to find items.",
+                "returns": "{'success': bool?, 'assets': [ { 'id': str, 'name': str, ... } ], 'count': int}",
             },
             "polyhaven.download": {
                 "sdkUsage": "assistant_sdk.polyhaven.download(asset=asset_dict, asset_type='type', resolution='2k')",
-                "notes": "Downloads and imports asset. Pass the full asset dict from search, or asset_id."
+                "notes": "Downloads and imports asset. Pass the full asset dict from search, or asset_id.",
+                "returns": "{'success': bool, 'path': str?, 'message': str?}",
             },
-            
             # Blender - Scene
             "blender.get_scene_info": {
                 "sdkUsage": "assistant_sdk.blender.get_scene_info(expand_depth=2)",
-                "notes": "Returns JSON tree of scene objects/collections."
+                "notes": "Returns JSON tree of scene objects/collections.",
+                "returns": "{'outliner': {'lines': [...], 'nodes': [...]}, 'fold_state': {...}, 'summary': str}",
             },
             "blender.get_object_info": {
                 "sdkUsage": "assistant_sdk.blender.get_object_info(object_names=['Name'])",
-                "notes": "Get detailed info for specific objects."
+                "notes": "Get detailed info for specific objects.",
             },
             "blender.list_collections": {
                 "sdkUsage": "assistant_sdk.blender.list_collections()",
-                "notes": "List all collection names."
+                "notes": "List all collection names.",
             },
             "blender.get_collection_info": {
                 "sdkUsage": "assistant_sdk.blender.get_collection_info(collection_names=['Name'])",
-                "notes": "Get info about specific collections."
+                "notes": "Get info about specific collections.",
             },
-            
             # Blender - Manipulation
             "blender.create_collection": {
                 "sdkUsage": "assistant_sdk.blender.create_collection(name='Name', parent='Parent')",
-                "notes": "Create a new collection."
+                "notes": "Create a new collection.",
+                "returns": "{'success': bool, 'name': str, 'parent': str|null}",
             },
             "blender.move_to_collection": {
                 "sdkUsage": "assistant_sdk.blender.move_to_collection(object_names=['Obj'], collection_name='Col')",
-                "notes": "Move objects to a collection."
+                "notes": "Move objects to a collection.",
+                "returns": "{'success': bool, 'moved': ['Obj', ...]?}",
             },
             "blender.set_collection_color": {
                 "sdkUsage": "assistant_sdk.blender.set_collection_color(collection_name='Col', color_tag='COLOR_01')",
-                "notes": "Set collection color tag."
+                "notes": "Set collection color tag.",
+                "returns": "{'success': bool}",
             },
             "blender.delete_collection": {
                 "sdkUsage": "assistant_sdk.blender.delete_collection(collection_names=['Col'], delete_objects=False)",
-                "notes": "Delete collections."
+                "notes": "Delete collections.",
+                "returns": "{'success': bool, 'deleted': ['Col', ...]}",
             },
-            
             # Blender - Selection/Active
             "blender.get_selection": {
                 "sdkUsage": "assistant_sdk.blender.get_selection()",
-                "notes": "Get list of selected object names."
+                "notes": "Get list of selected object names.",
+                "returns": "{'selected_objects': ['Name', ...], 'count': int, 'message': str}",
             },
             "blender.set_selection": {
                 "sdkUsage": "assistant_sdk.blender.set_selection(object_names=['Obj'], replace=True)",
-                "notes": "Set selected objects."
+                "notes": "Set selected objects.",
+                "returns": "{'success': bool, 'selected': ['Obj', ...], 'not_found': ['Name', ...], 'message': str}",
             },
             "blender.get_active": {
                 "sdkUsage": "assistant_sdk.blender.get_active()",
-                "notes": "Get active object name."
+                "notes": "Get active object name.",
+                "returns": "{'active_object': 'Name'|None, 'type': str|None, 'message': str}",
             },
             "blender.set_active": {
                 "sdkUsage": "assistant_sdk.blender.set_active(object_name='Obj')",
-                "notes": "Set active object."
+                "notes": "Set active object.",
+                "returns": "{'success': bool, 'active_object': 'Obj', 'message': str}",
             },
             "blender.select_by_type": {
                 "sdkUsage": "assistant_sdk.blender.select_by_type(type='MESH')",
-                "notes": "Select objects by type."
+                "notes": "Select objects by type.",
+                "returns": "{'success': bool, 'selected': ['Name', ...], 'count': int, 'message': str}",
             },
-            
-
-            
             # Vision
             "vision.capture": {
                 "sdkUsage": "assistant_sdk.vision.capture_viewport_for_vision()",
-                "notes": "SDK (execute_code): Capture 3D viewport as base64 image."
+                "notes": "SDK (execute_code): Capture 3D viewport as base64 image.",
+                "returns": "{'description': str, 'model': str, 'width': int, 'height': int}",
             },
-            
-            # Web
-            "web.search": {
-                "sdkUsage": "assistant_sdk.web.search(query='query', num_results=5)",
-                "notes": "Search the web (DuckDuckGo). Returns web PAGES, not direct images."
+            # Blender - Object/Material manipulation
+            "blender.create_object": {
+                "sdkUsage": "assistant_sdk.blender.create_object(type='PLANE'|'CUBE'|'SPHERE'|..., name='Name', location=[x,y,z], rotation=[x,y,z], scale=[x,y,z], text='...')",
+                "notes": "Create an object (mesh primitive, text, camera/light).",
+                "returns": "{'success': bool, 'name': str, 'type': str}",
             },
-            "web.fetch": {
-                "sdkUsage": "assistant_sdk.web.fetch_page(url='url', max_length=10000)",
-                "notes": "Fetch webpage content (text extraction)."
+            "blender.modify_object": {
+                "sdkUsage": "assistant_sdk.blender.modify_object(name='Obj', location=[x,y,z], rotation=[x,y,z], scale=[x,y,z], visible=True|False, objects=[{...}])",
+                "notes": "Modify properties of one or more objects (supports batch via 'objects').",
+                "returns": "{'success': bool, 'modified': ['Name', ...]}",
             },
-            "web.extract_images": {
-                "sdkUsage": "assistant_sdk.web.extract_images(url='url', min_width=400, max_images=10)",
-                "notes": "Extract image URLs from a webpage. Returns {'images': ['url1', 'url2', ...]}."
+            "blender.delete_object": {
+                "sdkUsage": "assistant_sdk.blender.delete_object(name='Obj'|None, names=['ObjA','ObjB'])",
+                "notes": "Delete object(s) by name (supports batch via 'names').",
+                "returns": "{'success': bool, 'deleted': ['Name', ...]}",
             },
-            "web.download_image": {
-                "sdkUsage": "assistant_sdk.web.download_image(image_url='url', apply_to_active=True, pack_image=True)",
-                "notes": "Download image from URL and apply as texture. Packs into .blend file."
+            "blender.set_material": {
+                "sdkUsage": "assistant_sdk.blender.set_material(object_name='Obj'|None, object_names=['ObjA','ObjB'], material_name='Mat'|None, color=[r,g,b(,a)])",
+                "notes": "Assign or create a material; sets Principled Base Color if 'color' specified.",
             },
             "web.images_workflow": {
                 "workflow": [
                     "# 3-STEP WORKFLOW for downloading web images:",
                     "1. results = assistant_sdk.web.search(query='kittens')  # Get pages about kittens",
                     "2. images = assistant_sdk.web.extract_images(results['results'][0]['url'])  # Extract image URLs",
-                    "3. assistant_sdk.web.download_image(images['images'][0])  # Download first image"
+                    "3. assistant_sdk.web.download_image(images['images'][0])  # Download first image",
                 ],
-                "notes": "Multi-step process: SEARCH for pages → EXTRACT image URLs → DOWNLOAD the image."
+                "notes": "Multi-step process: SEARCH for pages → EXTRACT image URLs → DOWNLOAD the image.",
             },
-           "web.extract_image_urls": {
+            "web.extract_image_urls": {
                 "sdkUsage": "assistant_sdk.web.extract_image_urls(url='url')",
-                "notes": "SDK (execute_code): Find image URLs on a page."
+                "notes": "SDK (execute_code): Find image URLs on a page.",
+                "returns": "{'success': bool, 'url': str, 'count': int, 'images': [str, ...]}",
             },
             "web.download_image": {
                 "sdkUsage": "assistant_sdk.web.download_image(image_url='url')",
-                "notes": "SDK (execute_code): Download image and load as Blender image/texture."
+                "notes": "SDK (execute_code): Download image and load as Blender image/texture.",
+                "returns": "{'success': bool, 'image_name': str, 'packed': bool, 'size': 'WxH', 'applied_to': str|None, 'material': str?, 'message': str}",
             },
-            
             # Sketchfab
             "sketchfab.search": {
                 "sdkUsage": "assistant_sdk.sketchfab.search(query='q', type='models')",
-                "notes": "SDK (execute_code): Search Sketchfab."
+                "notes": "SDK (execute_code): Search Sketchfab.",
+                "returns": "{'success': bool?, 'results': [...], 'count': int?}",
             },
             "sketchfab.download": {
                 "sdkUsage": "assistant_sdk.sketchfab.download(uid='uid')",
-                "notes": "SDK (execute_code): Download model from Sketchfab."
+                "notes": "SDK (execute_code): Download model from Sketchfab.",
+                "returns": "{'success': bool, 'path': str?, 'message': str?}",
             },
-            
             # RAG
             "rag.query": {
                 "sdkUsage": "assistant_sdk.rag.query(text='question')",
-                "notes": "SDK (execute_code): Query documentation."
+                "notes": "SDK (execute_code): Query documentation.",
+                "returns": "{'results': [{'title': str, 'url': str, 'excerpt': str, 'source': str}], 'count': int}",
             },
-            
             # Memory
             "memory.remember_fact": {
                 "sdkUsage": "assistant_sdk.memory.remember_fact(fact='fact', category='general')",
-                "notes": "SDK (execute_code): Store a general fact."
+                "notes": "SDK (execute_code): Store a general fact.",
+                "returns": "{'success': bool}",
             },
             "memory.remember_preference": {
                 "sdkUsage": "assistant_sdk.memory.remember_preference(key='key', value='value')",
-                "notes": "SDK (execute_code): Store a user preference."
+                "notes": "SDK (execute_code): Store a user preference.",
+                "returns": "{'success': bool}",
             },
             "memory.remember_learning": {
                 "sdkUsage": "assistant_sdk.memory.remember_learning(topic='topic', insight='insight')",
-                "notes": "SDK (execute_code): Record a technical learning/pitfall."
+                "notes": "SDK (execute_code): Record a technical learning/pitfall.",
+                "returns": "{'success': bool}",
             },
             "memory.search": {
                 "sdkUsage": "assistant_sdk.memory.search(query='query')",
-                "notes": "SDK (execute_code): Semantic search of memory."
-            }
+                "notes": "SDK (execute_code): Semantic search of memory.",
+                "returns": "{'results': [{'type': str, 'key': str, 'value': str}], 'count': int}",
+            },
         }
 
         results = []
-        
+
         for q in queries:
             # Normalize query: remove 'assistant_sdk.' prefix, handle 'tool/subtool'
             clean_q = q.replace("assistant_sdk.", "").lower()
-            
+
             # Split by slash if present (e.g. "polyhaven.search/download")
             sub_queries = clean_q.split("/")
-            
+
             for sub_q in sub_queries:
                 sub_q = sub_q.strip()
                 if not sub_q:
                     continue
-                    
+
                 # 1. Exact match
                 if sub_q in sdk_docs:
                     res = sdk_docs[sub_q]
                     # res["alias"] = sub_q <-- REMOVED
                     results.append(res)
                     continue
-                    
-                # 2. Namespace match (e.g. "polyhaven")
-                namespace_matches = [k for k in sdk_docs.keys() if k.startswith(sub_q + ".")]
+
+                # 2. Namespace match (e.g., "polyhaven")
+                namespace_matches = [
+                    k for k in sdk_docs.keys() if k.startswith(sub_q + ".")
+                ]
                 if namespace_matches:
                     for k in namespace_matches:
                         res = sdk_docs[k].copy()
                         # res["alias"] = k  <-- REMOVED
                         results.append(res)
                     continue
-                    
+
                 # 3. Fuzzy/Contains match
                 fuzzy_matches = [k for k in sdk_docs.keys() if sub_q in k]
                 if fuzzy_matches:
@@ -2563,7 +2602,7 @@ def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
                         # res["alias"] = k <-- REMOVED
                         results.append(res)
                     continue
-                    
+
         # Remove duplicates
         unique_results = []
         seen = set()
@@ -2573,11 +2612,12 @@ def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
             if key not in seen:
                 seen.add(key)
                 unique_results.append(r)
-                
+
         return {"results": unique_results}
 
     except Exception as e:
         import traceback
+
         return {"error": f"Help failed: {str(e)}", "traceback": traceback.format_exc()}
 
 
@@ -2657,18 +2697,11 @@ def register():
 
     # create_object
 
-
-
     # modify_object
-
 
     # delete_object (supports batch via 'names')
 
-
-
     # set_material
-
-
 
     # execute_code
 

@@ -2122,7 +2122,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             for cat in sorted(by_category.keys()):
                 # Category header with toggle
                 row = box.row()
-                row.label(text=cat, icon="down_arrow_hlt") # simplified icon
+                row.label(text=cat, icon="TRIA_DOWN") 
                 op = row.operator("assistant.toggle_category_tools_prefs", text="Toggle All", icon="CHECKBOX_HLT")
                 op.category = cat
                 op.enable = True # Logic handled in operator
