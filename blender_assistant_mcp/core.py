@@ -172,6 +172,7 @@ class AssistantSession:
             "- **IDEMPOTENCY**: Check if objects exist before creating them.\n"
             "- **SCENE AWARENESS**: Pay attention to 'SCENE UPDATES'.\n"
             "- **VERIFY**: Always verify your actions.\n"
+            "- **TEST OVER GUESS**: If unsure about API behavior, write a small test script using `execute_code` instead of speculating.\n"
             "- **LEARN**: Use `remember_learning` to record pitfalls or version quirks.\n\n"
             "TOOLS\n"
             f"{compact_tools}\n"
