@@ -67,19 +67,32 @@ class ToolManager:
 
     def get_system_prompt_hints(self, enabled_tools: Set[str]) -> str:
         """Generate SDK hints for tools that are NOT enabled natively."""
-        # Map categories to SDK namespaces
-        namespace_map = {
-            "Blender": "assistant_sdk.blender",
-            "PolyHaven": "assistant_sdk.polyhaven",
-            "Stock Photos": "assistant_sdk.stock_photos",
-            "Sketchfab": "assistant_sdk.sketchfab",
-            "Web": "assistant_sdk.web",
-            "RAG": "assistant_sdk.rag",
-            "Memory": "assistant_sdk.memory",
-            "Vision": "assistant_sdk.vision",
-        }
+        # Import SDK_DOCS lazily to avoid circular imports if any
+        from .blender_tools import SDK_DOCS
         
-        return mcp_tools.get_sdk_tools_schema(enabled_tools, namespace_map)
+        lines = []
+        
+        # Sort by key for stability
+        sorted_keys = sorted(SDK_DOCS.keys())
+        
+        for key in sorted_keys:
+            doc = SDK_DOCS[key]
+            
+            # Check if this tool is natively enabled
+            # Key format: "blender.create_object" -> native: "create_object"
+            native_name = key.split(".")[-1]
+            if native_name in enabled_tools:
+                continue
+                
+            # Format: - sdkUsage: notes
+            usage = doc.get("sdkUsage", "")
+            notes = doc.get("notes", "")
+            
+            if usage:
+                lines.append(f"- {usage}: {notes}")
+                
+        header = "SDK TOOLS (Call via `execute_code`):\n"
+        return header + "\n".join(lines) if lines else ""
 
     def get_compact_tool_list(self, enabled_tools: Set[str]) -> str:
         """Get a compact string representation of enabled tools for the system prompt."""
