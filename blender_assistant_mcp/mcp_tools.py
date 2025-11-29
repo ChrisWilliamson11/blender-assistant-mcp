@@ -438,14 +438,52 @@ def get_tools_schema(enabled_tools: List[str] = None) -> str:
         args_str = ", ".join(arg_names) if arg_names else ""
         # Shorten description
         desc = (tool.get("description", "") or "").strip()
-        if len(desc) > 80:
-            desc = desc[:77] + "..."
+        # Increase limit to avoid truncation of important details
+        if len(desc) > 120:
+            desc = desc[:117] + "..."
         if args_str:
             lines.append(f"- {name}({args_str}): {desc}")
         else:
             lines.append(f"- {name}(): {desc}")
-    header = "Available tools (compact):\n"
-    return header + "\n".join(lines) if lines else "Available tools: (none)"
+    header = "NATIVE TOOLS (Call directly):\n"
+    return header + "\n".join(lines) if lines else "NATIVE TOOLS (Call directly):\n(none)"
+
+
+def get_sdk_tools_schema(enabled_tools: List[str], namespace_map: Dict[str, str]) -> str:
+    """Return a compact tools cheat-sheet for SDK tools (not natively enabled).
+
+    Format per tool: "- namespace.name(arg1, arg2, ...): short description"
+    """
+    lines: List[str] = []
+    # Sort by category then name for grouping
+    sorted_items = sorted(_TOOLS.items(), key=lambda x: (x[1].get("category", "Other"), x[0]))
+    
+    for name, tool in sorted_items:
+        if name in enabled_tools:
+            continue
+            
+        category = tool.get("category", "Other")
+        namespace = namespace_map.get(category, "assistant_sdk")
+        
+        # Construct full name
+        full_name = f"{namespace}.{name}"
+        
+        schema = tool.get("inputSchema", {})
+        props = schema.get("properties", {})
+        arg_names = list(props.keys())
+        args_str = ", ".join(arg_names) if arg_names else ""
+        
+        desc = (tool.get("description", "") or "").strip()
+        if len(desc) > 120:
+            desc = desc[:117] + "..."
+            
+        if args_str:
+            lines.append(f"- {full_name}({args_str}): {desc}")
+        else:
+            lines.append(f"- {full_name}(): {desc}")
+            
+    header = "SDK TOOLS (Call via `execute_code`):\n"
+    return header + "\n".join(lines) if lines else ""
 
 
 def clear_tools():
