@@ -18,7 +18,7 @@ def chat_completion(
     model_path: str,
     messages: List[Dict[str, str]],
     temperature: float = 0.7,
-    max_tokens: int = 2048,
+    max_tokens: int = 8192,
     tools: Optional[List[Dict]] = None,
     **kwargs,
 ) -> Dict:

@@ -168,7 +168,8 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 model_path=model_name,
                 messages=full_messages,
                 tools=tools,
-                temperature=0.1 # Low temp for tool use
+                temperature=0.1, # Low temp for tool use
+                max_tokens=8192 # Allow space for long chain-of-thought
             )
             self._response = response
         except Exception as e:
