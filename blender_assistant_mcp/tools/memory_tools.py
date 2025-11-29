@@ -36,9 +36,9 @@ def remember_fact(fact: str, category: str = "general") -> Dict[str, Any]:
 
 def register():
     """Register memory tools."""
-    from . import mcp_tools
+    from . import tool_registry
     
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "remember_preference",
         remember_preference,
         "Store a user preference persistently.",
@@ -53,7 +53,7 @@ def register():
         category="Memory"
     )
     
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "remember_fact",
         remember_fact,
         "Store a general fact or instruction persistently.",
@@ -68,7 +68,7 @@ def register():
         category="Memory"
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "remember_learning",
         remember_learning,
         "Record a technical learning, pitfall, or version quirk.",
@@ -83,7 +83,7 @@ def register():
         category="Memory"
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "search_memory",
         search_memory,
         "Semantically search memory for relevant facts/learnings.",

@@ -121,9 +121,9 @@ def rag_get_stats() -> Dict[str, Any]:
 
 def register():
     """Register RAG tools with the MCP registry."""
-    from . import mcp_tools
+    from . import tool_registry
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "rag_query",
         rag_query,
         "Query the bundled Blender docs RAG and return top matches with metadata and excerpts. Supports source bias and page_type filtering.",
@@ -141,7 +141,7 @@ def register():
         category="RAG",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "rag_get_stats",
         rag_get_stats,
         "Get RAG status and basic stats (enabled, document_count, db_path).",

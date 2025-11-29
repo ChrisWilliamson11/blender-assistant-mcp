@@ -10,7 +10,7 @@ import typing
 
 import bpy
 
-from . import mcp_tools
+from . import tool_registry
 from .memory import MemoryManager
 
 _memory_manager = None
@@ -573,7 +573,7 @@ class _AssistantSDK:
             pass  # No preferences or no API keys
 
     def call(self, name: str, **kwargs):
-        return mcp_tools.execute_tool(name, kwargs)
+        return tool_registry.execute_tool(name, kwargs)
 
     def help(self) -> str:
         """Return a concise SDK quick reference for first-turn planning.
@@ -656,7 +656,7 @@ class _AssistantSDK:
             if not asset_type:
                 asset_type = "model"
 
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "search_polyhaven_assets",
                 {"asset_type": asset_type, "query": query, "limit": limit},
             )
@@ -723,7 +723,7 @@ class _AssistantSDK:
                     ),
                 }
 
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "download_polyhaven",
                 {
                     "asset_type": asset_type,
@@ -745,7 +745,7 @@ class _AssistantSDK:
             Returns:
                 Dict containing collections with hierarchy and basic info.
             """
-            return mcp_tools.execute_tool("list_collections", {})
+            return tool_registry.execute_tool("list_collections", {})
 
         def get_collection_info(self, collection_name: str):
             """Get detailed information about a specific collection.
@@ -756,7 +756,7 @@ class _AssistantSDK:
             Returns:
                 Dict with color tag, object list, and child collections.
             """
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "get_collection_info", {"collection_name": collection_name}
             )
 
@@ -787,7 +787,7 @@ class _AssistantSDK:
                 payload["parent"] = parent
             if collections is not None:
                 payload["collections"] = collections
-            return mcp_tools.execute_tool("create_collection", payload)
+            return tool_registry.execute_tool("create_collection", payload)
 
         def ensure_collection(self, name: str, parent: str | None = None):
             """Ensure a collection exists (idempotent). Creates if missing and links to parent or scene root.
@@ -799,7 +799,7 @@ class _AssistantSDK:
             Returns:
                 Dict describing the resulting collection state.
             """
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "create_collection", {"name": name, "parent": parent}
             )
 
@@ -813,7 +813,7 @@ class _AssistantSDK:
             Returns:
                 Dict describing the deletion result.
             """
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "delete_collection",
                 {"collection_name": collection_name, "delete_objects": delete_objects},
             )
@@ -836,7 +836,7 @@ class _AssistantSDK:
             Returns:
                 Dict with changed/failed and final collection state.
             """
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "move_to_collection",
                 {
                     "object_names": object_names,
@@ -862,7 +862,7 @@ class _AssistantSDK:
             Returns:
                 Dict with changed/unchanged/failed and a summary.
             """
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "set_collection_color",
                 {
                     "collection_name": collection_name,
@@ -883,7 +883,7 @@ class _AssistantSDK:
             root_filter: str | None = None,
         ):
             """Outliner-style, persistent scene view (hierarchical, compact, and stateful)."""
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "get_scene_info",
                 {
                     "expand_depth": expand_depth,
@@ -899,7 +899,7 @@ class _AssistantSDK:
 
         # Objects
         def get_object_info(self, name: str):
-            return mcp_tools.execute_tool("get_object_info", {"name": name})
+            return tool_registry.execute_tool("get_object_info", {"name": name})
 
         def create_object(
             self,
@@ -1096,7 +1096,7 @@ class _AssistantSDK:
 
         def get_active(self):
             """Get the active object name (if any)."""
-            return mcp_tools.execute_tool("get_active", {})
+            return tool_registry.execute_tool("get_active", {})
 
         def set_selection(self, object_names: list | str):
             """Set the current selection.
@@ -1109,17 +1109,17 @@ class _AssistantSDK:
             """
             if isinstance(object_names, str):
                 object_names = [object_names]
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "set_selection", {"object_names": object_names}
             )
 
         def set_active(self, object_name: str):
             """Set the active object by name."""
-            return mcp_tools.execute_tool("set_active", {"object_name": object_name})
+            return tool_registry.execute_tool("set_active", {"object_name": object_name})
 
         def select_by_type(self, object_type: str):
             """Select all objects of a given Blender type (e.g., 'MESH')."""
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "select_by_type", {"object_type": object_type}
             )
 
@@ -1131,7 +1131,7 @@ class _AssistantSDK:
             timeout_s: int = 15,
         ):
             """Capture the viewport and ask a vision model a question."""
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "capture_viewport_for_vision",
                 {
                     "question": question,
@@ -1156,7 +1156,7 @@ class _AssistantSDK:
             Returns:
                 Dict indicating login success or error.
             """
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "sketchfab_login",
                 {"email": email, "password": password, "save_token": save_token},
             )
@@ -1181,7 +1181,7 @@ class _AssistantSDK:
             Returns:
                 Dict with results and pagination info.
             """
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "sketchfab_search",
                 {
                     "query": query,
@@ -1205,7 +1205,7 @@ class _AssistantSDK:
             Returns:
                 Dict describing download/import result or an error.
             """
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "sketchfab_download_model",
                 {
                     "uid": uid,
@@ -1259,7 +1259,7 @@ class _AssistantSDK:
             if orientation and orientation.lower() == "squarish":
                 orientation = "square"
 
-            data = mcp_tools.execute_tool(
+            data = tool_registry.execute_tool(
                 "search_stock_photos",
                 {
                     "source": source,
@@ -1362,7 +1362,7 @@ class _AssistantSDK:
                     source = "unsplash"
 
             # Ignore unknown kwargs such as 'destination'
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "download_stock_photo",
                 {
                     "source": source,
@@ -1385,19 +1385,19 @@ class _AssistantSDK:
             Returns:
                 Dict with titles, URLs, and descriptions.
             """
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "web_search", {"query": query, "num_results": num_results}
             )
 
         def fetch_page(self, url: str, max_length: int = 10000):
             """Fetch and extract text content from a webpage."""
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "fetch_webpage", {"url": url, "max_length": max_length}
             )
 
         def extract_images(self, url: str, min_width: int = 400, max_images: int = 10):
             """Extract likely content image URLs from a webpage."""
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "extract_image_urls",
                 {"url": url, "min_width": min_width, "max_images": max_images},
             )
@@ -1406,7 +1406,7 @@ class _AssistantSDK:
             self, image_url: str, apply_to_active: bool = True, pack_image: bool = True
         ):
             """Download an image and optionally apply it as a texture."""
-            return mcp_tools.execute_tool(
+            return tool_registry.execute_tool(
                 "download_image_as_texture",
                 {
                     "image_url": image_url,
@@ -1450,11 +1450,11 @@ class _AssistantSDK:
             if page_types is not None:
                 payload["page_types"] = page_types
 
-            return mcp_tools.execute_tool("rag_query", payload)
+            return tool_registry.execute_tool("rag_query", payload)
 
         def get_stats(self):
             """Get RAG subsystem statistics (enabled, document count, db path)."""
-            return mcp_tools.execute_tool("rag_get_stats", {})
+            return tool_registry.execute_tool("rag_get_stats", {})
 
     class _Memory:
         def __init__(self, mcp):
@@ -1478,12 +1478,13 @@ class _AssistantSDK:
 
 
 def _get_assistant_sdk():
+    """Get the assistant SDK instance for execute_code namespace."""
     try:
-        return _AssistantSDK(mcp_tools)
+        from .. import assistant_sdk
+        return assistant_sdk.get_assistant_sdk()
     except Exception as e:
         print(f"[Assistant] CRITICAL: Failed to initialize assistant_sdk: {e}")
         import traceback
-
         traceback.print_exc()
 
         # Return a minimal stub so code doesn't crash entirely
@@ -2626,7 +2627,7 @@ def register():
 
     # get_scene_info
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "get_scene_info",
         get_scene_info,
         "Outliner-style, persistent scene view (hierarchical, compact, stateful).",
@@ -2683,7 +2684,7 @@ def register():
 
     # get_object_info
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "get_object_info",
         get_object_info,
         "Get detailed information about a specific object",
@@ -2705,7 +2706,7 @@ def register():
 
     # execute_code
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "execute_code",
         execute_code,
         "Execute Python code in Blender's context (use with caution)",
@@ -2721,7 +2722,7 @@ def register():
 
     # capture_viewport_for_vision (vision models only)
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "capture_viewport_for_vision",
         capture_viewport_for_vision,
         "Synchronously capture the current viewport and run a vision model to answer a question about the scene. Returns only the textual description and metadata (no image).",
@@ -2758,7 +2759,7 @@ def register():
 
     # list_collections
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "list_collections",
         list_collections,
         "List all collections with hierarchy and object counts",
@@ -2768,7 +2769,7 @@ def register():
 
     # get_collection_info
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "get_collection_info",
         get_collection_info,
         "Get info about a specific collection (objects and children)",
@@ -2787,7 +2788,7 @@ def register():
 
     # create_collection (supports batch via 'collections')
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "create_collection",
         create_collection,
         "Create one or more collections. Batch via 'collections'.",
@@ -2819,7 +2820,7 @@ def register():
 
     # move_to_collection
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "move_to_collection",
         move_to_collection,
         "Move objects to a collection; can create the target when missing.",
@@ -2852,7 +2853,7 @@ def register():
     )
 
     # set_collection_color (now supports batch via 'collection_names')
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "set_collection_color",
         set_collection_color,
         "Set collection color tag (Blender 4.2+). Accepts single name or list.",
@@ -2890,7 +2891,7 @@ def register():
         category="Blender",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "delete_collection",
         delete_collection,
         "Delete a collection. Optionally delete all objects within it.",
@@ -2914,7 +2915,7 @@ def register():
 
     # capture_viewport_for_vision (vision models only)
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "capture_viewport_for_vision",
         capture_viewport_for_vision,
         "Synchronously capture the current viewport and run a vision model to answer a question about the scene. Returns only the textual description and metadata (no image).",
@@ -2951,7 +2952,7 @@ def register():
 
     # list_collections
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "list_collections",
         list_collections,
         "List all collections with hierarchy and object counts",
@@ -2961,7 +2962,7 @@ def register():
 
     # get_collection_info
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "get_collection_info",
         get_collection_info,
         "Get info about a specific collection (objects and children)",
@@ -2980,7 +2981,7 @@ def register():
 
     # create_collection (supports batch via 'collections')
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "create_collection",
         create_collection,
         "Create one or more collections. Batch via 'collections'.",
@@ -3012,7 +3013,7 @@ def register():
 
     # move_to_collection
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "move_to_collection",
         move_to_collection,
         "Move objects to a collection; can create the target when missing.",
@@ -3045,7 +3046,7 @@ def register():
     )
 
     # set_collection_color (now supports batch via 'collection_names')
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "set_collection_color",
         set_collection_color,
         "Set collection color tag (Blender 4.2+). Accepts single name or list.",
@@ -3083,7 +3084,7 @@ def register():
         category="Blender",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "delete_collection",
         delete_collection,
         "Delete a collection. Optionally delete all objects within it.",
@@ -3105,7 +3106,7 @@ def register():
         category="Blender",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "assistant_help",
         assistant_help,
         "Return JSON Schemas for one or more assistant_sdk tool methods (e.g., 'polyhaven.search').",

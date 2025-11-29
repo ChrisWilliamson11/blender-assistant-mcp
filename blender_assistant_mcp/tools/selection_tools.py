@@ -4,7 +4,7 @@ This module contains tools for getting and setting object selection and active o
 """
 
 import bpy
-from . import mcp_tools
+from . import tool_registry
 
 
 def get_selection() -> dict:
@@ -167,7 +167,7 @@ def select_by_type(object_type: str) -> dict:
 def register():
     """Register all selection tools with the MCP registry."""
     
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "get_selection",
         get_selection,
         "Get the list of currently selected objects in Blender",
@@ -179,7 +179,7 @@ def register():
         category="Selection"
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "get_active",
         get_active,
         "Get the currently active object in Blender",
@@ -191,7 +191,7 @@ def register():
         category="Selection"
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "set_selection",
         set_selection,
         "Set the selection to specific objects by name",
@@ -209,7 +209,7 @@ def register():
         category="Selection"
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "set_active",
         set_active,
         "Set the active object by name",
@@ -226,7 +226,7 @@ def register():
         category="Selection"
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "select_by_type",
         select_by_type,
         "Select all objects of a specific type (MESH, CURVE, LIGHT, CAMERA, etc.)",

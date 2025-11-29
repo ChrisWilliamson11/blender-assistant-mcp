@@ -8,7 +8,7 @@ to control context window usage.
 
 import json
 from typing import Dict, List, Any, Set, Optional
-from . import mcp_tools
+from .tools import tool_registry
 
 class ToolManager:
     """Manages tool definitions and schema generation."""
@@ -50,7 +50,7 @@ class ToolManager:
     def get_openai_tools(self, enabled_tools: Set[str]) -> List[Dict[str, Any]]:
         """Generate OpenAI-style tool definitions for enabled tools."""
         tools = []
-        all_tools = mcp_tools.get_tools_list()
+        all_tools = tool_registry.get_tools_list()
         
         for t in all_tools:
             name = t.get("name")
@@ -96,4 +96,4 @@ class ToolManager:
 
     def get_compact_tool_list(self, enabled_tools: Set[str]) -> str:
         """Get a compact string representation of enabled tools for the system prompt."""
-        return mcp_tools.get_tools_schema(enabled_tools=sorted(list(enabled_tools)))
+        return tool_registry.get_tools_schema(enabled_tools=sorted(list(enabled_tools)))

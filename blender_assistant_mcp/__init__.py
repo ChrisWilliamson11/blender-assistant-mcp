@@ -21,24 +21,27 @@ bl_info = {
 }
 
 # Import modules
-from . import (
-    assistant,
+from . import assistant
+from .tools import (
+    tool_registry,
     blender_tools,
-    mcp_tools,
     polyhaven_tools,
-    preferences,
     rag_tools,
     selection_tools,
     sketchfab_tools,
     stock_photo_tools,
-    ui,
     web_tools,
     memory_tools,
+)
+from . import (
+    preferences,
+    ui,
+    assistant_sdk,
 )
 
 # Module list for registration
 _modules = [
-    mcp_tools,
+    tool_registry,
     blender_tools,
     polyhaven_tools,
     preferences,

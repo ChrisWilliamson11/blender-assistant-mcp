@@ -7,7 +7,7 @@ to run models locally with full GPU acceleration.
 import json
 import threading
 import bpy
-from . import mcp_tools
+from .tools import tool_registry
 from .core import AssistantSession
 from .tool_manager import ToolManager
 from . import ollama_adapter as llama_manager

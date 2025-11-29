@@ -10,7 +10,7 @@ import re
 import ast
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass, field
-from . import mcp_tools
+from .tools import tool_registry
 from .tool_manager import ToolManager
 from .memory import MemoryManager
 from .scene_watcher import SceneWatcher
@@ -234,7 +234,7 @@ class AssistantSession:
             print(f"[Session] Executing {call.tool} with {call.args}")
             
             # Execute tool
-            result = mcp_tools.execute_tool(call.tool, call.args)
+            result = tool_registry.execute_tool(call.tool, call.args)
             
             # Add result to history
             self.add_message("tool", json.dumps(result), name=call.tool)

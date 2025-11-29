@@ -19,7 +19,7 @@ import tempfile
 import bpy
 import httpx
 
-from . import mcp_tools
+from . import tool_registry
 
 SKETCHFAB_URL = "https://sketchfab.com"
 SKETCHFAB_API = "https://api.sketchfab.com"
@@ -257,7 +257,7 @@ def sketchfab_download_model(uid: str, import_into_scene: bool = True, name_hint
 
 def register():
     """Register Sketchfab tools in the MCP registry."""
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "sketchfab_login",
         sketchfab_login,
         "Login to Sketchfab using email/password (stores access token in-memory).",
@@ -273,7 +273,7 @@ def register():
         category="Sketchfab",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "sketchfab_search",
         sketchfab_search,
         "Search downloadable Sketchfab models via the v3 API (requires login).",
@@ -291,7 +291,7 @@ def register():
         category="Sketchfab",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "sketchfab_download_model",
         sketchfab_download_model,
         "Download a model by UID and optionally import into the current scene (requires login).",

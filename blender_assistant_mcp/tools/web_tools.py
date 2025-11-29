@@ -6,7 +6,7 @@ This module contains tools for web searches and other internet-based functionali
 import bpy
 import httpx
 
-from . import mcp_tools
+from . import tool_registry
 
 
 def web_search(query: str, num_results: int = 5) -> dict:
@@ -776,7 +776,7 @@ def extract_image_urls(url: str, min_width: int = 400, max_images: int = 10) -> 
 def register():
     """Register all web tools with the MCP registry."""
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "web_search",
         web_search,
         "Search the web for information using DuckDuckGo (useful for Blender documentation, tutorials, best practices)",
@@ -800,7 +800,7 @@ def register():
         category="Web",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "search_wikimedia_image",
         search_wikimedia_image,
         "Search Wikimedia Commons for free images and download as texture. Good for: nature, textures, architecture, historical photos. NOT for: modern stock photos, satellite imagery. Use simple search terms like 'wood grain', 'brick wall', 'mountain landscape'.",
@@ -822,7 +822,7 @@ def register():
         category="Web",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "fetch_webpage",
         fetch_webpage,
         "Fetch and extract text content from a webpage. Useful for reading articles, documentation, or getting detailed information from search results.",
@@ -846,7 +846,7 @@ def register():
         category="Web",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "extract_image_urls",
         extract_image_urls,
         "Extract likely content image URLs from a webpage (jpg/png/webp). Filters out tiny/logos/sprites and returns top N.",
@@ -877,7 +877,7 @@ def register():
         category="Web",
     )
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "download_image_as_texture",
         download_image_as_texture,
         "Download an image from a URL and optionally apply it as a texture. Images are packed into the .blend file by default.",

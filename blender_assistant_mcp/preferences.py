@@ -84,9 +84,9 @@ def get_preferences():
     # 2) Ensure Stock Photo tools are registered even if keys are missing.
     # Runtime checks inside the tools will prevent usage without valid keys.
     try:
-        from . import mcp_tools, stock_photo_tools
+        from .tools import tool_registry, stock_photo_tools
 
-        registered = {t.get("name") for t in (mcp_tools.get_tools_list() or [])}
+        registered = {t.get("name") for t in (tool_registry.get_tools_list() or [])}
         need_search = "search_stock_photos" not in registered
         need_download = "download_stock_photo" not in registered
         need_status = "check_stock_photo_download" not in registered
@@ -145,7 +145,7 @@ def get_preferences():
             }
 
             if need_search:
-                mcp_tools.register_tool(
+                tool_registry.register_tool(
                     "search_stock_photos",
                     stock_photo_tools.search_stock_photos,
                     "Search for stock photos (keys required at runtime).",
@@ -154,7 +154,7 @@ def get_preferences():
                 )
 
             if need_download:
-                mcp_tools.register_tool(
+                tool_registry.register_tool(
                     "download_stock_photo",
                     stock_photo_tools.download_stock_photo,
                     "Download a stock photo by ID (keys required at runtime).",
@@ -173,7 +173,7 @@ def get_preferences():
                 },
                 "required": ["job_id"],
             }
-            mcp_tools.register_tool(
+            tool_registry.register_tool(
                 "check_stock_photo_download",
                 stock_photo_tools.check_download_status,
                 "Check the status of a background stock photo download job",
@@ -1849,7 +1849,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
 
     def _draw_tools_settings(self, layout):
         """Draw tools configuration section with checkboxes."""
-        from . import mcp_tools
+        from .tools import tool_registry
 
         tools_box = layout.box()
         tools_box.label(text="Schema-Based Tools Configuration", icon="TOOL_SETTINGS")
@@ -2144,14 +2144,14 @@ class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
     bl_description = "Refresh the tool list from MCP registry"
 
     def execute(self, context):
-        from . import mcp_tools
+        from .tools import tool_registry
         prefs = context.preferences.addons[__package__].preferences
 
         # Sync with registry
         # We don't clear, we just add missing and update descriptions
         # This preserves user's enabled/disabled choices
         
-        for name, tool_data in mcp_tools._TOOLS.items():
+        for name, tool_data in tool_registry._TOOLS.items():
             # Check if exists
             found = False
             for item in prefs.tool_config_items:
@@ -2214,7 +2214,7 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
     preset: bpy.props.StringProperty()
 
     def execute(self, context):
-        from . import mcp_tools
+        from .tools import tool_registry
         prefs = context.preferences.addons[__package__].preferences
         
         # Define presets
@@ -2232,7 +2232,7 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
                 "assistant_help", "search_memory"
             }
         elif self.preset == "all":
-            target_tools = set(mcp_tools._TOOLS.keys())
+            target_tools = set(tool_registry._TOOLS.keys())
         else:
             return {"CANCELLED"}
 
@@ -2267,13 +2267,13 @@ def register():
     def delayed_tool_init():
         try:
             if bpy.context:
-                from . import mcp_tools
+                from .tools import tool_registry
                 prefs = bpy.context.preferences.addons[__package__].preferences
 
                 # Simple Sync: Add missing tools
                 existing = {t.name for t in prefs.tool_config_items}
                 count = 0
-                for name, tool_data in mcp_tools._TOOLS.items():
+                for name, tool_data in tool_registry._TOOLS.items():
                     if name not in existing:
                         item = prefs.tool_config_items.add()
                         item.name = name
@@ -2412,7 +2412,7 @@ class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
     def execute(self, context):
         import json
 
-        from . import mcp_tools
+        from .tools import tool_registry
 
         prefs = context.preferences.addons[__package__].preferences
 
@@ -2426,7 +2426,7 @@ class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
         prefs.tool_config_items.clear()
 
         # Add all registered tools
-        for name, tool_data in mcp_tools._TOOLS.items():
+        for name, tool_data in tool_registry._TOOLS.items():
             item = prefs.tool_config_items.add()
             item.name = name
             item.category = tool_data.get("category", "Other")
@@ -2475,7 +2475,7 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
     preset: bpy.props.StringProperty()
 
     def execute(self, context):
-        from . import mcp_tools
+        from .tools import tool_registry
 
         prefs = context.preferences.addons[__package__].preferences
 
@@ -2509,7 +2509,7 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
             ]
         elif self.preset == "all":
             # All registered tools
-            all_tools = mcp_tools.get_tools_list()
+            all_tools = tool_registry.get_tools_list()
             tools = [t.get("name") for t in all_tools if t.get("name")]
         else:
             self.report({"ERROR"}, f"Unknown preset: {self.preset}")
@@ -2564,7 +2564,7 @@ def register():
             if bpy.context:
                 import json
 
-                from . import mcp_tools
+                from .tools import tool_registry
 
                 prefs = bpy.context.preferences.addons[__package__].preferences
 
@@ -2577,7 +2577,7 @@ def register():
                 except Exception:
                     default_enabled = []
 
-                for name, tool_data in mcp_tools._TOOLS.items():
+                for name, tool_data in tool_registry._TOOLS.items():
                     if name not in existing_names:
                         # Add new tool
                         item = prefs.tool_config_items.add()

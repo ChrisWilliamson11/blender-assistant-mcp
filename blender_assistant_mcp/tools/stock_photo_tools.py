@@ -11,7 +11,7 @@ import time
 import bpy
 import httpx
 
-from . import mcp_tools
+from . import tool_registry
 
 # Global state for tracking background downloads
 _download_threads = []
@@ -473,7 +473,7 @@ def register():
             available_sources.append("pexels")
 
         # Consolidated search tool
-        mcp_tools.register_tool(
+        tool_registry.register_tool(
             "search_stock_photos",
             search_stock_photos,
             f"Search for stock photos. Available sources: {', '.join(available_sources)}. Returns high-quality free photos for textures and references.",
@@ -504,7 +504,7 @@ def register():
             category="Stock Photos",
         )
 
-        mcp_tools.register_tool(
+        tool_registry.register_tool(
             "download_stock_photo",
             download_stock_photo,
             f"Download a stock photo by ID (optionally apply as texture). Available sources: {', '.join(available_sources)}.",

@@ -9,7 +9,7 @@ import os
 import bpy
 import httpx
 
-from . import mcp_tools
+from . import tool_registry
 
 
 def search_polyhaven_assets(asset_type: str, query: str = "", limit: int = 10) -> dict:
@@ -908,7 +908,7 @@ def download_polyhaven(
 def register():
     """Register all PolyHaven tools with the MCP registry."""
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "search_polyhaven_assets",
         search_polyhaven_assets,
         "Search PolyHaven (HDRIs, textures, models). Returns a dict with 'assets' (list of {id, name, categories}) and 'count'.",
@@ -939,7 +939,7 @@ def register():
 
     # Consolidated download tool
 
-    mcp_tools.register_tool(
+    tool_registry.register_tool(
         "download_polyhaven",
         download_polyhaven,
         "Download from PolyHaven (hdri, texture, model). Requires 'asset_type' and 'asset_id'. 'resolution' applies to hdri/texture; 'file_format' applies to hdri/model (auto if omitted).",
