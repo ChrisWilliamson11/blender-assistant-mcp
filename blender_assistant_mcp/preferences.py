@@ -1974,6 +1974,15 @@ class AssistantPreferences(bpy.types.AddonPreferences):
     show_section_tools: bpy.props.BoolProperty(
         name="Show Tools Configuration", default=False
     )
+    show_section_debug: bpy.props.BoolProperty(
+        name="Show Debug Settings", default=False
+    )
+
+    debug_mode: bpy.props.BoolProperty(
+        name="Enable Debug Logging",
+        description="Print full LLM payloads and responses to the system console",
+        default=False,
+    )
 
     def draw(self, context):
         """Draw preferences UI"""
@@ -2043,8 +2052,8 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         row.label(text="RAG & Documentation Search", icon="DOCUMENTS")
         if self.show_section_rag:
             self._draw_rag_settings(layout)
-            
-        # API Keys (collapsible)
+
+        # Stock Photo APIs (collapsible)
         row = layout.row(align=True)
         row.prop(
             self,
@@ -2053,9 +2062,9 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             icon="TRIA_DOWN" if self.show_section_api else "TRIA_RIGHT",
             emboss=False,
         )
-        row.label(text="Stock Photo APIs", icon="WORLD")
+        row.label(text="Stock Photo APIs (Optional)", icon="IMAGE_DATA")
         if self.show_section_api:
-            self._draw_api_settings(layout)
+            self._draw_api_keys(layout)
 
         # Tools Configuration (collapsible)
         row = layout.row(align=True)
@@ -2069,6 +2078,27 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         row.label(text="Tools Configuration", icon="TOOL_SETTINGS")
         if self.show_section_tools:
             self._draw_tools_config(layout)
+
+        # Debug Settings (collapsible)
+        row = layout.row(align=True)
+        row.prop(
+            self,
+            "show_section_debug",
+            text="",
+            icon="TRIA_DOWN" if self.show_section_debug else "TRIA_RIGHT",
+            emboss=False,
+        )
+        row.label(text="Debug Settings", icon="CONSOLE")
+        if self.show_section_debug:
+            self._draw_debug_settings(layout)
+
+    def _draw_debug_settings(self, layout):
+        """Draw debug settings."""
+        box = layout.box()
+        box.label(text="Debug Configuration", icon="CONSOLE")
+        col = box.column(align=True)
+        col.prop(self, "debug_mode")
+        col.label(text="Check system console for output", icon="INFO")
 
     def _draw_model_management(self, layout):
         # ... (implementation unchanged)

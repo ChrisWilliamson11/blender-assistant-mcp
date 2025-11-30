@@ -437,9 +437,25 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
         else:
             col.label(text="No active chat session")
 
+        # Bottom Action Bar (Copy Chat / Remember Chat)
+        if wm.assistant_chat_sessions:
+            col.separator()
+            row = col.row(align=True)
+            row.operator(
+                "assistant.copy_debug_conversation",
+                text="Copy Chat",
+                icon="COPYDOWN",
+            )
+            row.operator(
+                "assistant.remember_chat",
+                text="Remember Chat",
+                icon="MEMORY",
+            )
+
     def _draw_json_hierarchy(
         self, parent_box, data, message_idx, depth=0, path="", max_depth=5
     ):
+
         """Draw JSON data as nested boxes with collapsible sections.
 
         Args:

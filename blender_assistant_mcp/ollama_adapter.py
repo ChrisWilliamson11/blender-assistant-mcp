@@ -49,6 +49,9 @@ def chat_completion(
     n_gpu_layers = kwargs.get("n_gpu_layers", -1)
     n_batch = kwargs.get("n_batch", 256)
 
+    # Extract debug mode
+    debug_mode = kwargs.get("debug_mode", False)
+
     try:
         url = f"{ollama.base_url}/api/chat"
 
@@ -102,10 +105,12 @@ def chat_completion(
             req_local.add_header("Content-Type", "application/json")
 
             print(f"[Ollama Adapter] Sending request to {url} with model {model_name}")
-
             print(
                 f"[Ollama Adapter] Payload size: {len(data_local)} bytes, {len(messages)} messages"
             )
+            
+            if debug_mode:
+                print(f"[Ollama Adapter] FULL PAYLOAD:\n{json.dumps(payload_obj, indent=2)}")
 
             # Always stream; accumulate content and tool_calls
             with urllib.request.urlopen(req_local, timeout=300) as response_local:
@@ -129,9 +134,9 @@ def chat_completion(
                         # Ignore non-JSON keep-alives
                         continue
 
-                    # Debug: Show raw JSON to diagnose thinking fields (uncomment to debug)
-                    # if obj and not obj.get("done"):
-                    #     print(f"[Ollama Adapter] Raw chunk: {json.dumps(obj)[:200]}")
+                    # Debug: Show raw JSON to diagnose thinking fields
+                    if debug_mode and not obj.get("done"):
+                        print(f"[Ollama Adapter] Chunk: {json.dumps(obj)}")
 
                     # Accumulate message/content
                     msg = obj.get("message")
@@ -181,6 +186,10 @@ def chat_completion(
                 print(
                     f"[Ollama Adapter] Stream complete: {len(content)} chars, {len(thinking)} thinking chars, {len(tool_calls) if tool_calls else 0} tool calls"
                 )
+                
+                if debug_mode:
+                    print(f"[Ollama Adapter] FINAL RESPONSE:\n{json.dumps(final_message, indent=2)}")
+                    
                 return {"message": final_message}
 
         try:

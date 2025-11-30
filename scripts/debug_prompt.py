@@ -37,18 +37,26 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from blender_assistant_mcp.core import AssistantSession
 from blender_assistant_mcp.tool_manager import ToolManager
-import blender_assistant_mcp.blender_tools as blender_tools
-import blender_assistant_mcp.sketchfab_tools as sketchfab_tools
+import blender_assistant_mcp
 
 def main():
     print("="*80)
     print("BLENDER ASSISTANT PROMPT DEBUGGER")
     print("="*80)
     
-    # Register tools (mocking registration)
-    print("\n[0] Registering Tools...")
-    blender_tools.register()
-    sketchfab_tools.register()
+    # Register tools using the EXACT same list as the extension
+    print("\n[0] Registering Tools (using blender_assistant_mcp._modules)...")
+    if hasattr(blender_assistant_mcp, "_modules"):
+        for module in blender_assistant_mcp._modules:
+            if hasattr(module, "register"):
+                try:
+                    module.register()
+                    print(f"  - Registered: {module.__name__}")
+                except Exception as e:
+                    print(f"  - Failed to register {module.__name__}: {e}")
+    else:
+        print("ERROR: Could not find _modules in blender_assistant_mcp package!")
+        return
     
     # 1. Initialize Session
     print("\n[1] Initializing Session...")

@@ -11,7 +11,7 @@ import typing
 import bpy
 
 from . import tool_registry
-from .memory import MemoryManager
+from ..memory import MemoryManager
 
 _memory_manager = None
 
@@ -564,7 +564,7 @@ class _AssistantSDK:
         self.memory = self._Memory(mcp)
         # Only expose stock_photos if API keys are configured
         try:
-            from .preferences import get_preferences
+            from ..preferences import get_preferences
 
             prefs = get_preferences()
             if prefs and (prefs.unsplash_api_key or prefs.pexels_api_key):
@@ -1764,7 +1764,7 @@ def capture_viewport_for_vision(
 
             def _call_vlm():
                 try:
-                    from . import ollama_adapter as llama_manager
+                    from .. import ollama_adapter as llama_manager
 
                     messages = [
                         {

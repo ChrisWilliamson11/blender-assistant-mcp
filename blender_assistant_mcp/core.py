@@ -153,6 +153,8 @@ class AssistantSession:
         compact_tools = self.tool_manager.get_compact_tool_list(self.enabled_tools)
         sdk_hints = self.tool_manager.get_system_prompt_hints(self.enabled_tools)
         memory_context = self.memory_manager.get_context()
+        if not memory_context:
+            memory_context = "(No memories yet)"
         
         # Check for scene changes
         scene_changes = self.scene_watcher.consume_changes()

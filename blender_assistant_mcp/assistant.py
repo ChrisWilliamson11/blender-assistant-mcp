@@ -158,7 +158,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             if area.type == 'VIEW_3D':
                 area.tag_redraw()
 
-    def _http_worker(self, model_name, messages, system_prompt, tools):
+    def _http_worker(self, model_name, messages, system_prompt, tools, debug_mode=False):
         """Background thread for LLM request."""
         try:
             # Prepend system prompt
@@ -169,7 +169,8 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 messages=full_messages,
                 tools=tools,
                 temperature=0.1, # Low temp for tool use
-                max_tokens=8192 # Allow space for long chain-of-thought
+                max_tokens=8192, # Allow space for long chain-of-thought
+                debug_mode=debug_mode
             )
             self._response = response
         except Exception as e:
@@ -225,13 +226,14 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         """Start an LLM request."""
         prefs = context.preferences.addons[__package__].preferences
         model_name = getattr(prefs, "model_file", "qwen2.5-coder:7b")
+        debug_mode = getattr(prefs, "debug_mode", False)
         
         # Prepare tools for OpenAI format
         tools = session.tool_manager.get_openai_tools(session.enabled_tools)
         
         self._thread = threading.Thread(
             target=self._http_worker,
-            args=(model_name, session.history, session.get_system_prompt(), tools),
+            args=(model_name, session.history, session.get_system_prompt(), tools, debug_mode),
             daemon=True
         )
         self._thread.start()

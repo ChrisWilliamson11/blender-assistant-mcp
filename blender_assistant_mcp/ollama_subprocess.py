@@ -289,7 +289,11 @@ class OllamaSubprocess:
             result = json.loads(response.read().decode("utf-8"))
 
         # Return first embedding (Ollama returns list of embeddings)
-        return result.get("embeddings", [[]])[0]
+        embeddings = result.get("embeddings")
+        if not embeddings:
+            print(f"[Ollama] ERROR: No embeddings in response: {result}")
+            return []
+        return embeddings[0]
 
     def list_models(self):
         """List available models.

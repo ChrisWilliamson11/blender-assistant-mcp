@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from .rag_system import ensure_rag_loaded_async, get_rag_instance, is_rag_enabled
+from ..rag_system import ensure_rag_loaded_async, get_rag_instance, is_rag_enabled
 
 
 def _to_set_from_any(val: Any) -> Optional[set]:

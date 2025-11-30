@@ -1,7 +1,7 @@
 """Tools for interacting with the memory system."""
 
 from typing import Dict, Any
-from .memory import MemoryManager
+from ..memory import MemoryManager
 
 # Global instance (lazy loaded or injected)
 _memory_manager = None

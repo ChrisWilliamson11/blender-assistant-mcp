@@ -120,7 +120,7 @@ def search_unsplash_photos(
         Dictionary with search results
     """
     try:
-        from .preferences import get_preferences
+        from ..preferences import get_preferences
 
         prefs = get_preferences()
 
@@ -221,7 +221,7 @@ def _download_unsplash_photo_impl(photo_id: str, apply_as_texture: bool = True) 
         Dictionary with download status
     """
     try:
-        from .preferences import get_preferences
+        from ..preferences import get_preferences
 
         prefs = get_preferences()
 
@@ -453,7 +453,7 @@ def download_stock_photo(
 def register():
     """Register stock photo tools conditionally based on API keys."""
     try:
-        from .preferences import get_preferences
+        from ..preferences import get_preferences
 
         prefs = get_preferences()
     except:
@@ -543,7 +543,7 @@ def search_pexels_photos(query: str, per_page: int = 10, orientation: str = "") 
         Dictionary with search results
     """
     try:
-        from .preferences import get_preferences
+        from ..preferences import get_preferences
 
         prefs = get_preferences()
 
@@ -640,7 +640,7 @@ def _download_pexels_photo_impl(photo_id: int, apply_as_texture: bool = True) ->
         Dictionary with download status
     """
     try:
-        from .preferences import get_preferences
+        from ..preferences import get_preferences
 
         prefs = get_preferences()
 
