@@ -238,6 +238,15 @@ def infer_capabilities_from_name(model_name: str) -> dict:
 # Removed get_model_capabilities() - no longer needed
 # We use Ollama's API to get model information
 
+# Global download state (shared across all download operators)
+_download_state = {
+    "active": False,
+    "thread": None,
+    "progress": 0.0,
+    "status": "",
+    "error": None,
+    "display_name": "",
+}
 
 def get_ollama_models():
     """Get list of installed Ollama models.
@@ -325,6 +334,99 @@ def format_model_description(model_info: dict) -> str:
         return f"{name} - {' | '.join(badges)}"
     else:
         return name
+
+
+def _sync_tools_to_json(prefs):
+    """Sync tool_config_items checkboxes to schema_tools JSON."""
+    import json
+
+    enabled = [t.name for t in prefs.tool_config_items if t.enabled]
+    # Always ensure execute_code is included
+    if "execute_code" not in enabled:
+        enabled.append("execute_code")
+    prefs.schema_tools = json.dumps(enabled)
+
+
+def _on_models_folder_update(self, context):
+    import os
+
+    import bpy
+
+    from . import ollama_subprocess
+
+    def _norm_external_url(u: str) -> str:
+        try:
+            s = (u or "").strip()
+            if not s:
+                return ""
+            # Strip trailing /api or /api/ if present
+            if s.endswith("/api") or s.endswith("/api/"):
+                s = s[: s.rfind("/api")]
+            # Remove trailing slashes
+            while s.endswith("/"):
+                s = s[:-1]
+            # Ensure scheme
+            if not (
+                s.lower().startswith("http://") or s.lower().startswith("https://")
+            ):
+                s = "http://" + s
+            return s
+        except Exception:
+            return u
+
+    try:
+        # Update environment for the subprocess (models folder override)
+
+        if getattr(self, "models_folder", ""):
+            os.environ["OLLAMA_MODELS"] = self.models_folder
+
+        else:
+            # Clear override to fall back to default
+
+            os.environ.pop("OLLAMA_MODELS", None)
+
+        # Normalize and persist external Ollama URL (idempotent)
+        try:
+            norm = _norm_external_url(getattr(self, "external_ollama_url", ""))
+            if norm and norm != self.external_ollama_url:
+                self.external_ollama_url = norm
+        except Exception:
+            pass
+
+        # Apply server mode based on external toggle
+        if getattr(self, "use_external_ollama", False):
+            # Ensure embedded server is stopped; do not start bundled server
+            ollama_subprocess.stop_ollama()
+
+            # Touch/get instance so it picks up latest prefs; external base_url is applied in get_ollama()
+            _ = ollama_subprocess.get_ollama()
+            started = False
+        else:
+            # Restart embedded Ollama so it picks up the current settings
+            ollama_subprocess.stop_ollama()
+            started = ollama_subprocess.start_ollama()
+
+        # Refresh the models list (enum) without requiring a Blender restart
+
+        # Always try to refresh; external mode will query the external server.
+        try:
+            bpy.ops.assistant.refresh_models()
+
+        except Exception:
+            pass
+
+        # Redraw Preferences UI so changes are visible immediately
+
+        try:
+            for area in context.screen.areas:
+                if area.type == "PREFERENCES":
+                    area.tag_redraw()
+
+        except Exception:
+            pass
+
+    except Exception as e:
+        print(f"[Assistant] models_folder update failed: {e}")
 
 
 class ASSISTANT_OT_refresh_models(bpy.types.Operator):
@@ -509,17 +611,6 @@ class ASSISTANT_OT_search_ollama_library(bpy.types.Operator):
         wm = context.window_manager
         if self._timer:
             wm.event_timer_remove(self._timer)
-
-
-# Global download state (shared across all download operators)
-_download_state = {
-    "active": False,
-    "thread": None,
-    "progress": 0.0,
-    "status": "",
-    "error": None,
-    "display_name": "",
-}
 
 
 class ASSISTANT_OT_pull_model(bpy.types.Operator):
@@ -799,66 +890,6 @@ class ASSISTANT_OT_delete_model(bpy.types.Operator):
             return {"CANCELLED"}
 
 
-class ASSISTANT_OT_rebuild_rag_db(bpy.types.Operator):
-    """Rebuild the Blender RAG database (runs builder script)"""
-
-    bl_idname = "assistant.rebuild_rag_db"
-    bl_label = "Rebuild RAG Database"
-    bl_options = {"REGISTER"}
-
-    def execute(self, context):
-        import subprocess
-        import sys
-        import threading
-        from pathlib import Path
-
-        try:
-            prefs = (
-                context.preferences.addons[__package__].preferences
-                if __package__ in context.preferences.addons
-                else None
-            )
-            self.report({"INFO"}, "Starting RAG database rebuild...")
-            extension_dir = Path(__file__).resolve().parent
-            repo_root = extension_dir.parent
-            candidates = [
-                repo_root / "build_rag_database.py",
-                extension_dir / "build_rag_database.py",
-            ]
-            builder = None
-            for c in candidates:
-                if c.exists():
-                    builder = c
-                    break
-            if builder is None:
-                self.report(
-                    {"ERROR"},
-                    "Could not find build_rag_database.py in repo or extension folder",
-                )
-                return {"CANCELLED"}
-
-            def _run_build():
-                try:
-                    subprocess.run(
-                        [sys.executable, str(builder)], cwd=str(repo_root), check=True
-                    )
-                    # Reload RAG after build
-                    from . import rag_system
-
-                    rag = rag_system.get_rag_instance()
-                    rag.initialize()
-                    print("[RAG] Rebuild complete and RAG reloaded")
-                except Exception as e:
-                    print(f"[RAG] Rebuild failed: {e}")
-
-            threading.Thread(target=_run_build, daemon=True).start()
-            return {"FINISHED"}
-        except Exception as e:
-            self.report({"ERROR"}, str(e))
-            return {"CANCELLED"}
-
-
-# Property group for individual tool (checkbox-based UI)
 class ToolConfigItem(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(name="Tool Name")
     enabled: bpy.props.BoolProperty(
@@ -868,88 +899,6 @@ class ToolConfigItem(bpy.types.PropertyGroup):
     )
     category: bpy.props.StringProperty(name="Category")
     description: bpy.props.StringProperty(name="Description")
-
-
-def _on_models_folder_update(self, context):
-    import os
-
-    import bpy
-
-    from . import ollama_subprocess
-
-    def _norm_external_url(u: str) -> str:
-        try:
-            s = (u or "").strip()
-            if not s:
-                return ""
-            # Strip trailing /api or /api/ if present
-            if s.endswith("/api") or s.endswith("/api/"):
-                s = s[: s.rfind("/api")]
-            # Remove trailing slashes
-            while s.endswith("/"):
-                s = s[:-1]
-            # Ensure scheme
-            if not (
-                s.lower().startswith("http://") or s.lower().startswith("https://")
-            ):
-                s = "http://" + s
-            return s
-        except Exception:
-            return u
-
-    try:
-        # Update environment for the subprocess (models folder override)
-
-        if getattr(self, "models_folder", ""):
-            os.environ["OLLAMA_MODELS"] = self.models_folder
-
-        else:
-            # Clear override to fall back to default
-
-            os.environ.pop("OLLAMA_MODELS", None)
-
-        # Normalize and persist external Ollama URL (idempotent)
-        try:
-            norm = _norm_external_url(getattr(self, "external_ollama_url", ""))
-            if norm and norm != self.external_ollama_url:
-                self.external_ollama_url = norm
-        except Exception:
-            pass
-
-        # Apply server mode based on external toggle
-        if getattr(self, "use_external_ollama", False):
-            # Ensure embedded server is stopped; do not start bundled server
-            ollama_subprocess.stop_ollama()
-
-            # Touch/get instance so it picks up latest prefs; external base_url is applied in get_ollama()
-            _ = ollama_subprocess.get_ollama()
-            started = False
-        else:
-            # Restart embedded Ollama so it picks up the current settings
-            ollama_subprocess.stop_ollama()
-            started = ollama_subprocess.start_ollama()
-
-        # Refresh the models list (enum) without requiring a Blender restart
-
-        # Always try to refresh; external mode will query the external server.
-        try:
-            bpy.ops.assistant.refresh_models()
-
-        except Exception:
-            pass
-
-        # Redraw Preferences UI so changes are visible immediately
-
-        try:
-            for area in context.screen.areas:
-                if area.type == "PREFERENCES":
-                    area.tag_redraw()
-
-        except Exception:
-            pass
-
-    except Exception as e:
-        print(f"[Assistant] models_folder update failed: {e}")
 
 
 class ASSISTANT_OT_toggle_model_capability(bpy.types.Operator):
@@ -1141,6 +1090,19 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             ("HIGH", "High", "Detailed reasoning"),
         ],
         default="LOW",
+    )
+
+    keep_alive: bpy.props.EnumProperty(
+        name="Keep Model Loaded",
+        description="How long to keep the model loaded in memory after a request",
+        items=[
+            ("5m", "5 Minutes", "Keep loaded for 5 minutes (default)"),
+            ("15m", "15 Minutes", "Keep loaded for 15 minutes"),
+            ("30m", "30 Minutes", "Keep loaded for 30 minutes"),
+            ("60m", "1 Hour", "Keep loaded for 1 hour"),
+            ("-1", "Forever", "Keep loaded until Blender closes or model is changed"),
+        ],
+        default="5m",
     )
 
     # Removed: lean_respect_tool_selector (Lean/API‑Lean now always use curated tool lists)
@@ -1761,13 +1723,11 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         settings_col = settings_box.column(align=True)
 
         # Basic settings
-
         settings_col.prop(self, "temperature")
 
         # Thinking / execution controls
-
         settings_col.prop(self, "thinking_level")
-
+        settings_col.prop(self, "keep_alive")
 
         # Advanced sampling (collapsible)
         settings_col.separator()
@@ -1847,113 +1807,113 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         api_col.label(text="  • Unsplash: unsplash.com/developers")
         api_col.label(text="  • Pexels: pexels.com/api")
 
-    def _draw_tools_settings(self, layout):
-        """Draw tools configuration section with checkboxes."""
-        from .tools import tool_registry
+    # def _draw_tools_settings(self, layout):
+    #     """Draw tools configuration section with checkboxes."""
+    #     from .tools import tool_registry
 
-        tools_box = layout.box()
-        tools_box.label(text="Schema-Based Tools Configuration", icon="TOOL_SETTINGS")
+    #     tools_box = layout.box()
+    #     tools_box.label(text="Schema-Based Tools Configuration", icon="TOOL_SETTINGS")
 
-        tools_col = tools_box.column(align=True)
-        tools_col.label(
-            text="Select which tools to expose to the LLM via OpenAI schema:",
-            icon="INFO",
-        )
+    #     tools_col = tools_box.column(align=True)
+    #     tools_col.label(
+    #         text="Select which tools to expose to the LLM via OpenAI schema:",
+    #         icon="INFO",
+    #     )
 
-        # Quick preset buttons
-        tools_col.separator()
-        tools_col.label(text="Quick Presets:", icon="PRESET")
-        preset_row = tools_col.row(align=True)
+    #     # Quick preset buttons
+    #     tools_col.separator()
+    #     tools_col.label(text="Quick Presets:", icon="PRESET")
+    #     preset_row = tools_col.row(align=True)
 
-        op = preset_row.operator("assistant.set_tool_preset", text="Lean (Default)")
-        op.preset = "lean"
+    #     op = preset_row.operator("assistant.set_tool_preset", text="Lean (Default)")
+    #     op.preset = "lean"
 
-        op = preset_row.operator("assistant.set_tool_preset", text="Core Only")
-        op.preset = "core"
+    #     op = preset_row.operator("assistant.set_tool_preset", text="Core Only")
+    #     op.preset = "core"
 
-        op = preset_row.operator("assistant.set_tool_preset", text="All Tools")
-        op.preset = "all"
+    #     op = preset_row.operator("assistant.set_tool_preset", text="All Tools")
+    #     op.preset = "all"
 
-        # Refresh button
-        tools_col.separator()
-        tools_col.operator(
-            "assistant.refresh_tool_config",
-            text="Refresh Tool List",
-            icon="FILE_REFRESH",
-        )
+    #     # Refresh button
+    #     tools_col.separator()
+    #     tools_col.operator(
+    #         "assistant.refresh_tool_config",
+    #         text="Refresh Tool List",
+    #         icon="FILE_REFRESH",
+    #     )
 
-        # Show tools grouped by category with checkboxes
-        tools_col.separator()
+    #     # Show tools grouped by category with checkboxes
+    #     tools_col.separator()
 
-        if not hasattr(self, "tool_config_items") or len(self.tool_config_items) == 0:
-            tools_col.label(
-                text="No tools found. Click 'Refresh Tool List'.", icon="INFO"
-            )
-            return
+    #     if not hasattr(self, "tool_config_items") or len(self.tool_config_items) == 0:
+    #         tools_col.label(
+    #             text="No tools found. Click 'Refresh Tool List'.", icon="INFO"
+    #         )
+    #         return
 
-        # Count enabled tools
-        enabled_count = sum(1 for t in self.tool_config_items if t.enabled)
-        tools_col.label(
-            text=f"Enabled: {enabled_count} / {len(self.tool_config_items)} tools",
-            icon="CHECKBOX_HLT",
-        )
+    #     # Count enabled tools
+    #     enabled_count = sum(1 for t in self.tool_config_items if t.enabled)
+    #     tools_col.label(
+    #         text=f"Enabled: {enabled_count} / {len(self.tool_config_items)} tools",
+    #         icon="CHECKBOX_HLT",
+    #     )
 
-        tools_col.separator()
+    #     tools_col.separator()
 
-        # Get tools grouped by category
-        tools_by_category = {}
-        for tool in self.tool_config_items:
-            cat = tool.category or "Other"
-            if cat not in tools_by_category:
-                tools_by_category[cat] = []
-            tools_by_category[cat].append(tool)
+    #     # Get tools grouped by category
+    #     tools_by_category = {}
+    #     for tool in self.tool_config_items:
+    #         cat = tool.category or "Other"
+    #         if cat not in tools_by_category:
+    #             tools_by_category[cat] = []
+    #         tools_by_category[cat].append(tool)
 
-        # Draw category sections
-        for category in sorted(tools_by_category.keys()):
-            tools = tools_by_category[category]
+    #     # Draw category sections
+    #     for category in sorted(tools_by_category.keys()):
+    #         tools = tools_by_category[category]
 
-            # Category header
-            box = tools_col.box()
-            row = box.row()
+    #         # Category header
+    #         box = tools_col.box()
+    #         row = box.row()
 
-            enabled_in_cat = sum(1 for t in tools if t.enabled)
-            row.label(
-                text=f"{category} ({enabled_in_cat}/{len(tools)})", icon="TOOL_SETTINGS"
-            )
+    #         enabled_in_cat = sum(1 for t in tools if t.enabled)
+    #         row.label(
+    #             text=f"{category} ({enabled_in_cat}/{len(tools)})", icon="TOOL_SETTINGS"
+    #         )
 
-            # Category enable/disable buttons
-            op = row.operator(
-                "assistant.toggle_category_tools_prefs",
-                text="",
-                icon="CHECKBOX_HLT",
-                emboss=False,
-            )
-            op.category = category
-            op.enable = True
+    #         # Category enable/disable buttons
+    #         op = row.operator(
+    #             "assistant.toggle_category_tools_prefs",
+    #             text="",
+    #             icon="CHECKBOX_HLT",
+    #             emboss=False,
+    #         )
+    #         op.category = category
+    #         op.enable = True
 
-            op = row.operator(
-                "assistant.toggle_category_tools_prefs",
-                text="",
-                icon="CHECKBOX_DEHLT",
-                emboss=False,
-            )
-            op.category = category
-            op.enable = False
+    #         op = row.operator(
+    #             "assistant.toggle_category_tools_prefs",
+    #             text="",
+    #             icon="CHECKBOX_DEHLT",
+    #             emboss=False,
+    #         )
+    #         op.category = category
+    #         op.enable = False
 
-            # Tool list with checkboxes
-            for tool in sorted(tools, key=lambda t: t.name):
-                row = box.row()
-                row.prop(tool, "enabled", text=tool.name)
-                # Show execute_code as always enabled
-                if tool.name == "execute_code":
-                    row.enabled = False
-                    row.label(text="(always enabled)", icon="LOCKED")
+    #         # Tool list with checkboxes
+    #         for tool in sorted(tools, key=lambda t: t.name):
+    #             row = box.row()
+    #             row.prop(tool, "enabled", text=tool.name)
+    #             # Show execute_code as always enabled
+    #             if tool.name == "execute_code":
+    #                 row.enabled = False
+    #                 row.label(text="(always enabled)", icon="LOCKED")
 
-        tools_col.separator()
-        tools_col.label(
-            text="Note: execute_code is always enabled",
-            icon="KEYFRAME_HLT",
-        )
+    #     tools_col.separator()
+    #     tools_col.label(
+    #         text="Note: execute_code is always enabled",
+    #         icon="KEYFRAME_HLT",
+    #     )
 
     # Schema-based tools configuration (checkbox-based UI)
     tool_config_items: bpy.props.CollectionProperty(type=ToolConfigItem)
@@ -1972,7 +1932,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
     show_section_rag: bpy.props.BoolProperty(name="Show RAG Settings", default=True)
     show_section_api: bpy.props.BoolProperty(name="Show Stock Photo APIs", default=True)
     show_section_tools: bpy.props.BoolProperty(
-        name="Show Tools Configuration", default=False
+        name="Show MCP enabled Tools", default=False
     )
     show_section_debug: bpy.props.BoolProperty(
         name="Show Debug Settings", default=False
@@ -2075,7 +2035,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             icon="TRIA_DOWN" if self.show_section_tools else "TRIA_RIGHT",
             emboss=False,
         )
-        row.label(text="Tools Configuration", icon="TOOL_SETTINGS")
+        row.label(text="Show MCP enabled Tools", icon="TOOL_SETTINGS")
         if self.show_section_tools:
             self._draw_tools_config(layout)
 
@@ -2100,11 +2060,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         col.prop(self, "debug_mode")
         col.label(text="Check system console for output", icon="INFO")
 
-    def _draw_model_management(self, layout):
-        # ... (implementation unchanged)
-        pass
 
-    # ... (other draw methods unchanged) ...
 
     def _draw_api_settings(self, layout):
         """Draw API key settings."""
@@ -2122,6 +2078,13 @@ class AssistantPreferences(bpy.types.AddonPreferences):
     def _draw_tools_config(self, layout):
         """Draw tools configuration section"""
         box = layout.box()
+        box.label(text="Schema-Based Tools Configuration", icon="TOOL_SETTINGS")
+
+        tools_col = box.column(align=True)
+        tools_col.label(
+            text="Select which tools to expose to the LLM via OpenAI schema:",
+            icon="INFO",
+        )
         
         # Presets
         row = box.row()
@@ -2174,272 +2137,6 @@ class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
     bl_description = "Refresh the tool list from MCP registry"
 
     def execute(self, context):
-        from .tools import tool_registry
-        prefs = context.preferences.addons[__package__].preferences
-
-        # Sync with registry
-        # We don't clear, we just add missing and update descriptions
-        # This preserves user's enabled/disabled choices
-        
-        for name, tool_data in tool_registry._TOOLS.items():
-            # Check if exists
-            found = False
-            for item in prefs.tool_config_items:
-                if item.name == name:
-                    # Update metadata
-                    item.category = tool_data.get("category", "Other")
-                    item.description = tool_data.get("description", "")
-                    found = True
-                    break
-            
-            if not found:
-                item = prefs.tool_config_items.add()
-                item.name = name
-                item.category = tool_data.get("category", "Other")
-                item.description = tool_data.get("description", "")
-                # Default to enabled for core tools, disabled for others? 
-                # Or just enabled by default? Let's say enabled by default for discoverability.
-                item.enabled = True 
-
-        self.report({"INFO"}, f"Refreshed tool list. Total: {len(prefs.tool_config_items)}")
-        return {"FINISHED"}
-
-
-class ASSISTANT_OT_toggle_category_tools_prefs(bpy.types.Operator):
-    bl_idname = "assistant.toggle_category_tools_prefs"
-    bl_label = "Toggle Category Tools"
-    bl_description = "Enable/Disable all tools in a category"
-    
-    category: bpy.props.StringProperty()
-    enable: bpy.props.BoolProperty()
-
-    def execute(self, context):
-        prefs = context.preferences.addons[__package__].preferences
-        
-        # Determine target state (flip first item found)
-        target_state = True
-        for item in prefs.tool_config_items:
-            if item.category == self.category and item.name != "execute_code":
-                if item.enabled:
-                    target_state = False
-                    break
-        
-        count = 0
-        for item in prefs.tool_config_items:
-            if item.category == self.category:
-                if item.name == "execute_code":
-                    continue
-                item.enabled = target_state
-                count += 1
-                
-        self.report({"INFO"}, f"Toggled {count} tools in {self.category}")
-        return {"FINISHED"}
-
-
-class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
-    bl_idname = "assistant.set_tool_preset"
-    bl_label = "Set Tool Preset"
-    bl_description = "Enable a preset group of tools"
-    
-    preset: bpy.props.StringProperty()
-
-    def execute(self, context):
-        from .tools import tool_registry
-        prefs = context.preferences.addons[__package__].preferences
-        
-        # Define presets
-        if self.preset == "lean":
-             target_tools = {
-                "execute_code", "get_scene_info", "get_object_info", 
-                "list_collections", "get_collection_info", "create_collection", 
-                "move_to_collection", "set_collection_color", "delete_collection", 
-                "get_selection", "get_active", "set_selection", "set_active", 
-                "select_by_type", "assistant_help", "capture_viewport_for_vision"
-            }
-        elif self.preset == "core":
-            target_tools = {
-                "execute_code", "get_scene_info", "get_object_info", 
-                "assistant_help", "search_memory"
-            }
-        elif self.preset == "all":
-            target_tools = set(tool_registry._TOOLS.keys())
-        else:
-            return {"CANCELLED"}
-
-        for item in prefs.tool_config_items:
-            item.enabled = item.name in target_tools or item.name == "execute_code"
-
-        self.report({"INFO"}, f"Applied preset: {self.preset}")
-        return {"FINISHED"}
-
-
-def register():
-    """Register preferences and operators, auto-scan for Ollama models."""
-    bpy.utils.register_class(ToolConfigItem)
-
-    bpy.utils.register_class(ASSISTANT_OT_refresh_models)
-    bpy.utils.register_class(ASSISTANT_OT_pull_model)
-    bpy.utils.register_class(ASSISTANT_OT_delete_model)
-    bpy.utils.register_class(ASSISTANT_OT_start_ollama)
-    bpy.utils.register_class(ASSISTANT_OT_stop_ollama)
-    bpy.utils.register_class(ASSISTANT_OT_open_ollama_folder)
-
-    bpy.utils.register_class(ASSISTANT_OT_search_ollama_library)
-
-    bpy.utils.register_class(ASSISTANT_OT_toggle_model_capability)
-    bpy.utils.register_class(ASSISTANT_OT_refresh_tool_config)
-    bpy.utils.register_class(ASSISTANT_OT_toggle_category_tools_prefs)
-    bpy.utils.register_class(ASSISTANT_OT_set_tool_preset)
-
-    bpy.utils.register_class(AssistantPreferences)
-
-    # Initialize tool config after a delay (tools need to be registered first)
-    def delayed_tool_init():
-        try:
-            if bpy.context:
-                from .tools import tool_registry
-                prefs = bpy.context.preferences.addons[__package__].preferences
-
-                # Simple Sync: Add missing tools
-                existing = {t.name for t in prefs.tool_config_items}
-                count = 0
-                for name, tool_data in tool_registry._TOOLS.items():
-                    if name not in existing:
-                        item = prefs.tool_config_items.add()
-                        item.name = name
-                        item.category = tool_data.get("category", "Other")
-                        item.description = tool_data.get("description", "")
-                        item.enabled = True # Default to enabled
-                        count += 1
-                
-                if count > 0:
-                    print(f"[Tool Config] Added {count} new tools")
-        except Exception as e:
-            print(f"[Tool Config] Init failed: {e}")
-        return None
-
-    bpy.app.timers.register(delayed_tool_init, first_interval=1.0)
-
-    # Collapsible section toggles
-    show_section_models: bpy.props.BoolProperty(
-        name="Show Model Management", default=True
-    )
-    show_section_downloads: bpy.props.BoolProperty(
-        name="Show Download Models", default=True
-    )
-    show_section_gpu: bpy.props.BoolProperty(name="Show GPU Optimization", default=True)
-    show_section_generation: bpy.props.BoolProperty(
-        name="Show Generation Settings", default=True
-    )
-    show_section_rag: bpy.props.BoolProperty(name="Show RAG Settings", default=True)
-    show_section_api: bpy.props.BoolProperty(name="Show Stock Photo APIs", default=True)
-    show_section_tools: bpy.props.BoolProperty(
-        name="Show Tools Configuration", default=False
-    )
-
-    def draw(self, context):
-        """Draw preferences UI"""
-        layout = self.layout
-
-        # Model Management (collapsible)
-        row = layout.row(align=True)
-        row.prop(
-            self,
-            "show_section_models",
-            text="",
-            icon="TRIA_DOWN" if self.show_section_models else "TRIA_RIGHT",
-            emboss=False,
-        )
-        row.label(text="Model Management", icon="PREFERENCES")
-        if self.show_section_models:
-            self._draw_model_management(layout)
-
-        # Download Models (collapsible)
-        row = layout.row(align=True)
-        row.prop(
-            self,
-            "show_section_downloads",
-            text="",
-            icon="TRIA_DOWN" if self.show_section_downloads else "TRIA_RIGHT",
-            emboss=False,
-        )
-        row.label(text="Download Models", icon="IMPORT")
-        if self.show_section_downloads:
-            self._draw_model_downloads(layout)
-
-        # GPU Optimization (collapsible)
-        row = layout.row(align=True)
-        row.prop(
-            self,
-            "show_section_gpu",
-            text="",
-            icon="TRIA_DOWN" if self.show_section_gpu else "TRIA_RIGHT",
-            emboss=False,
-        )
-        row.label(text="GPU Optimization", icon="SHADING_RENDERED")
-        if self.show_section_gpu:
-            self._draw_gpu_settings(layout)
-
-        # Generation Settings (collapsible)
-        row = layout.row(align=True)
-        row.prop(
-            self,
-            "show_section_generation",
-            text="",
-            icon="TRIA_DOWN" if self.show_section_generation else "TRIA_RIGHT",
-            emboss=False,
-        )
-        row.label(text="Generation Settings", icon="SETTINGS")
-        if self.show_section_generation:
-            self._draw_generation_settings(layout)
-
-        # RAG (collapsible)
-        row = layout.row(align=True)
-        row.prop(
-            self,
-            "show_section_rag",
-            text="",
-            icon="TRIA_DOWN" if self.show_section_rag else "TRIA_RIGHT",
-            emboss=False,
-        )
-        row.label(text="RAG & Documentation Search", icon="DOCUMENTS")
-        if self.show_section_rag:
-            self._draw_rag_settings(layout)
-
-        # Stock Photo APIs (collapsible)
-        row = layout.row(align=True)
-        row.prop(
-            self,
-            "show_section_api",
-            text="",
-            icon="TRIA_DOWN" if self.show_section_api else "TRIA_RIGHT",
-            emboss=False,
-        )
-        row.label(text="Stock Photo APIs (Optional)", icon="IMAGE_DATA")
-        if self.show_section_api:
-            self._draw_api_keys(layout)
-
-        # Tools Configuration (collapsible)
-        row = layout.row(align=True)
-        row.prop(
-            self,
-            "show_section_tools",
-            text="",
-            icon="TRIA_DOWN" if self.show_section_tools else "TRIA_RIGHT",
-            emboss=False,
-        )
-        row.label(text="Tools Configuration (Advanced)", icon="TOOL_SETTINGS")
-        if self.show_section_tools:
-            self._draw_tools_settings(layout)
-
-
-# Operator to refresh tool configuration from registry
-class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
-    bl_idname = "assistant.refresh_tool_config"
-    bl_label = "Refresh Tool Configuration"
-    bl_description = "Refresh the tool list from MCP registry"
-
-    def execute(self, context):
         import json
 
         from .tools import tool_registry
@@ -2470,7 +2167,6 @@ class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
         return {"FINISHED"}
 
 
-# Operator to toggle all tools in a category
 class ASSISTANT_OT_toggle_category_tools_prefs(bpy.types.Operator):
     bl_idname = "assistant.toggle_category_tools_prefs"
     bl_label = "Toggle Category Tools"
@@ -2496,7 +2192,6 @@ class ASSISTANT_OT_toggle_category_tools_prefs(bpy.types.Operator):
         return {"FINISHED"}
 
 
-# Operator to set tool presets
 class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
     bl_idname = "assistant.set_tool_preset"
     bl_label = "Set Tool Preset"
@@ -2555,17 +2250,6 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
 
         self.report({"INFO"}, f"Set {len(tools)} tools from preset '{self.preset}'")
         return {"FINISHED"}
-
-
-def _sync_tools_to_json(prefs):
-    """Sync tool_config_items checkboxes to schema_tools JSON."""
-    import json
-
-    enabled = [t.name for t in prefs.tool_config_items if t.enabled]
-    # Always ensure execute_code is included
-    if "execute_code" not in enabled:
-        enabled.append("execute_code")
-    prefs.schema_tools = json.dumps(enabled)
 
 
 def register():

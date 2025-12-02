@@ -96,13 +96,13 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
                 "assistant.refresh_model_status", text="", icon="FILE_REFRESH"
             )
 
-            box.separator()
+            # box.separator()
 
-            # Generation settings
-            box.label(text="Generation Settings:", icon="SETTINGS")
-            box.prop(prefs, "use_rag", text="Enable Documentation")
-            if prefs.use_rag:
-                box.prop(prefs, "rag_num_results", text="Results")
+            # # Generation settings
+            # box.label(text="Generation Settings:", icon="SETTINGS")
+            # box.prop(prefs, "use_rag", text="Enable Documentation")
+            # if prefs.use_rag:
+            #     box.prop(prefs, "rag_num_results", text="Results")
 
         col.separator()
 
@@ -241,11 +241,11 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
                 rows=8,
             )
             # Copy debug conversation button
-            col.operator(
-                "assistant.copy_debug_conversation",
-                text="Copy Debug Conversation",
-                icon="TEXT",
-            )
+            # col.operator(
+            #     "assistant.copy_debug_conversation",
+            #     text="Copy Debug Conversation",
+            #     icon="TEXT",
+            # )
 
             # Multi-line display of selected message
             if (
@@ -990,6 +990,110 @@ class ASSISTANT_OT_copy_debug_conversation(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class ASSISTANT_OT_remember_chat(bpy.types.Operator):
+    """Summarize the current chat and store it in long-term memory"""
+
+    bl_idname = "assistant.remember_chat"
+    bl_label = "Remember Chat"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        import threading
+        from . import ollama_adapter
+        from .tools import tool_registry
+
+        wm = context.window_manager
+        if not wm.assistant_chat_sessions:
+            self.report({"WARNING"}, "No chat session")
+            return {"CANCELLED"}
+        idx = wm.assistant_active_chat_index
+        if idx < 0 or idx >= len(wm.assistant_chat_sessions):
+            self.report({"WARNING"}, "Invalid chat session")
+            return {"CANCELLED"}
+        session = wm.assistant_chat_sessions[idx]
+        
+        # Build transcript
+        lines = []
+        lines.append(f"Chat Session: {session.name}")
+        for i, msg in enumerate(session.messages):
+            role = msg.role or ""
+            content = msg.content or ""
+            lines.append(f"[{role}] {content}")
+        transcript = "\n".join(lines)
+        
+        prefs = context.preferences.addons[__package__].preferences
+        model_name = getattr(prefs, "model_file", "qwen2.5-coder:7b")
+
+        def _worker():
+            try:
+                # Construct a focused prompt for summarization
+                system_prompt = (
+                    "You are a memory manager for an AI assistant. "
+                    "Your ONLY goal is to analyze the conversation transcript and save key learnings using the `remember_learning` tool. "
+                    "Do NOT chat. Do NOT ask questions. Do NOT output conversational text. "
+                    "JUST call the `remember_learning` tool with a 'topic' (e.g. 'Chat Summary') and 'insight' (the summary text)."
+                )
+                
+                user_msg = (
+                    "Analyze this transcript and save key insights:\n\n"
+                    f"{transcript}"
+                )
+                
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_msg}
+                ]
+                
+                # We only need the remember_learning tool
+                tools = [tool_registry.get_tool_schema("remember_learning")]
+                
+                print("[Remember Chat] Starting background summarization...")
+                response = ollama_adapter.chat_completion(
+                    model_path=model_name,
+                    messages=messages,
+                    tools=tools,
+                    temperature=0.1,
+                    max_tokens=1024
+                )
+                
+                # Process response
+                msg = response.get("message", {})
+                tool_calls = msg.get("tool_calls", [])
+                
+                if tool_calls:
+                    for call in tool_calls:
+                        func = call.get("function", {})
+                        name = func.get("name")
+                        args = func.get("arguments", {})
+                        if isinstance(args, str):
+                            import json
+                            try:
+                                args = json.loads(args)
+                            except:
+                                pass
+                                
+                        if name == "remember_learning":
+                            print(f"[Remember Chat] Saving memory: {args}")
+                            res = tool_registry.execute_tool(name, args)
+                            if isinstance(res, dict) and "error" in res:
+                                print(f"[Remember Chat] Failed to save memory: {res['error']}")
+                            else:
+                                # We can't easily report to UI from thread, but we can print
+                                print("[Remember Chat] Memory saved successfully.")
+                else:
+                    print("[Remember Chat] No memory tool called by LLM.")
+                    
+            except Exception as e:
+                print(f"[Remember Chat] Error: {e}")
+
+        # Run in background thread
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+        
+        self.report({"INFO"}, "Analyzing chat in background...")
+        return {"FINISHED"}
+
+
 # Preset storage helpers
 def _assistant_preset_file_path():
     import os
@@ -1479,6 +1583,7 @@ def register():
     bpy.utils.register_class(ASSISTANT_OT_paste_image)
     bpy.utils.register_class(ASSISTANT_OT_copy_message)
     bpy.utils.register_class(ASSISTANT_OT_copy_debug_conversation)
+    bpy.utils.register_class(ASSISTANT_OT_remember_chat)
     bpy.utils.register_class(ASSISTANT_OT_save_preset)
     bpy.utils.register_class(ASSISTANT_OT_run_preset)
     bpy.utils.register_class(ASSISTANT_OT_load_model)
@@ -1506,6 +1611,7 @@ def unregister():
     bpy.utils.unregister_class(ASSISTANT_OT_refresh_model_status)
     bpy.utils.unregister_class(ASSISTANT_OT_unload_model)
     bpy.utils.unregister_class(ASSISTANT_OT_load_model)
+    bpy.utils.unregister_class(ASSISTANT_OT_remember_chat)
     bpy.utils.unregister_class(ASSISTANT_OT_copy_debug_conversation)
     bpy.utils.unregister_class(ASSISTANT_OT_run_preset)
     bpy.utils.unregister_class(ASSISTANT_OT_save_preset)

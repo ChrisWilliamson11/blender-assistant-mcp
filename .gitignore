@@ -8,6 +8,7 @@
 # Ignore both root-level and package directory variants
 
 /rag_db/
+/temp_docs/
 
 /blender_assistant_mcp/rag_db/
 
@@ -60,3 +61,5 @@ ENV/
 .DS_Store
 Thumbs.db
 *.log
+blender_assistant_mcp/blender_python_reference_5_0.zip
+blender_assistant_mcp/blender_manual_html.zip

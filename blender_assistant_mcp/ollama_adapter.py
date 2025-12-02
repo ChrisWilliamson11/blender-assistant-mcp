@@ -43,6 +43,35 @@ def chat_completion(
     # Use model name directly (it's already an Ollama model name, not a path)
     model_name = model_path
 
+    # Sanitize messages for better model compatibility
+    # Many models get confused by 'tool' or 'system' roles appearing mid-chat,
+    # or if 'tool' messages lack proper tool_call_ids.
+    # We convert them to labeled User messages to ensure the LLM sees them as external inputs.
+    sanitized_messages = []
+    for i, msg in enumerate(messages):
+        role = msg.get("role")
+        content = msg.get("content", "")
+        
+        if role == "system" and i > 0:
+            # Mid-chat system messages (e.g. Scene Updates) -> User message with header
+            sanitized_messages.append({
+                "role": "user",
+                "content": f"[System Update]\n{content}"
+            })
+        elif role == "tool":
+            # Tool outputs -> User message with header
+            # This is safer than relying on strict tool_call_id matching which might be missing
+            name = msg.get("name", "tool")
+            sanitized_messages.append({
+                "role": "user",
+                "content": f"[Tool Output: {name}]\n{content}"
+            })
+        else:
+            sanitized_messages.append(msg)
+            
+    # Use sanitized messages instead of raw messages
+    messages = sanitized_messages
+
     # Extract Ollama-specific parameters from kwargs (passed from assistant.py)
     # Use conservative defaults to avoid server-side 400 errors and long startups
     n_ctx = kwargs.get("n_ctx", 8192)
@@ -83,6 +112,10 @@ def chat_completion(
             "stream": True,
             "options": options,
         }
+
+        # Add keep_alive if provided
+        if "keep_alive" in kwargs:
+            payload["keep_alive"] = kwargs["keep_alive"]
 
         # Optional: native tools for supported models
         if tools:
@@ -270,7 +303,7 @@ def chat_completion(
         return {"error": f"Chat completion failed: {str(e)}"}
 
 
-def generate_embedding(model_path: str, text: str) -> Optional[List[float]]:
+def generate_embedding(model_path: str, text: str, **kwargs) -> Optional[List[float]]:
     """Generate embeddings using Ollama.
 
     Args:
@@ -290,7 +323,9 @@ def generate_embedding(model_path: str, text: str) -> Optional[List[float]]:
     model_name = model_path
 
     try:
-        return ollama.generate_embedding(model_name, text)
+        # Default to 5m for embeddings if not specified
+        keep_alive = kwargs.get("keep_alive", "5m")
+        return ollama.generate_embedding(model_name, text, keep_alive=keep_alive)
     except Exception as e:
         print(f"[Ollama Adapter] Embedding failed: {e}")
         return None

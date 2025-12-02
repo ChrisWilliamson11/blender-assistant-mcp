@@ -24,11 +24,31 @@ class _Namespace:
     
     def _make_tool_method(self, tool_name: str):
         """Create a method that calls tool_registry.execute_tool."""
-        def tool_method(**kwargs) -> Dict[str, Any]:
+        tool = self._tools[tool_name]
+        
+        def tool_method(*args, **kwargs) -> Dict[str, Any]:
+            # Handle positional arguments by mapping them to schema properties
+            if args:
+                # Get parameter names from schema
+                schema = tool.get('inputSchema', {})
+                props = schema.get('properties', {})
+                # Since we don't have explicit order in standard JSON schema, 
+                # we'll use the order of keys in 'properties' as a best effort,
+                # which usually matches definition order in Python dicts.
+                param_names = list(props.keys())
+                
+                if len(args) > len(param_names):
+                    raise TypeError(f"{tool_name}() takes {len(param_names)} positional arguments but {len(args)} were given")
+                
+                for i, arg in enumerate(args):
+                    param_name = param_names[i]
+                    if param_name in kwargs:
+                        raise TypeError(f"{tool_name}() got multiple values for argument '{param_name}'")
+                    kwargs[param_name] = arg
+            
             return tool_registry.execute_tool(tool_name, kwargs)
         
         # Set docstring from tool description
-        tool = self._tools[tool_name]
         tool_method.__doc__ = tool.get('description', f'{tool_name} tool')
         tool_method.__name__ = tool_name
         

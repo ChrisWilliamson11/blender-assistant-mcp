@@ -8,6 +8,12 @@ import httpx
 
 from . import tool_registry
 
+# Try to import preferences for API keys
+try:
+    from .. import preferences
+except ImportError:
+    preferences = None
+
 
 def web_search(query: str, num_results: int = 5) -> dict:
     """Search the web for information using DuckDuckGo HTML (no API key required).
@@ -661,6 +667,12 @@ def extract_image_urls(url: str, min_width: int = 400, max_images: int = 10) -> 
                     "tiny",
                     "pixel",
                     "badge",
+                    "arrow",
+                    "button",
+                    "spacer",
+                    "separator",
+                    "bg",
+                    "background",
                 ]
                 if any(bt in ul for bt in bad_terms):
                     penalty = 1
@@ -728,7 +740,28 @@ def extract_image_urls(url: str, min_width: int = 400, max_images: int = 10) -> 
                 html,
                 re.IGNORECASE,
             ):
-                add_candidate(m.group(1), None, prop)
+                # Try to find dimensions for this property
+                w_hint = None
+                try:
+                    # Look for corresponding width property (e.g. og:image:width)
+                    # This is a simple heuristic; strictly we should match the specific tag index, 
+                    # but usually there's only one main og:image.
+                    width_prop = prop + ":width"
+                    mw = re.search(
+                        rf'<meta[^>]+(?:property|name)=["\']{width_prop}["\'][^>]+content=["\'](\d+)["\']',
+                        html,
+                        re.IGNORECASE,
+                    )
+                    if mw:
+                        w_hint = int(mw.group(1))
+                except Exception:
+                    pass
+                
+                # If no width specified, assume it's a large content image (boost ranking)
+                if not w_hint:
+                    w_hint = 800
+                    
+                add_candidate(m.group(1), w_hint, prop)
 
         # <link rel="image_src" href="...">
         for m in re.finditer(
@@ -773,6 +806,188 @@ def extract_image_urls(url: str, min_width: int = 400, max_images: int = 10) -> 
         return {"error": f"Failed to extract images: {str(e)}"}
 
 
+def search_unsplash(query: str, api_key: str, num_results: int = 5) -> dict:
+    """Search Unsplash API for high-quality images."""
+    try:
+        url = "https://api.unsplash.com/search/photos"
+        params = {
+            "query": query,
+            "per_page": num_results,
+            "orientation": "landscape",
+        }
+        headers = {"Authorization": f"Client-ID {api_key}"}
+        
+        with httpx.Client() as client:
+            resp = client.get(url, params=params, headers=headers, timeout=10.0)
+            if resp.status_code == 401:
+                return {"error": "Invalid Unsplash API key"}
+            resp.raise_for_status()
+            data = resp.json()
+            
+        results = data.get("results", [])
+        image_urls = []
+        for res in results:
+            # Get regular size URL (good balance of quality/size)
+            urls = res.get("urls", {})
+            img_url = urls.get("regular") or urls.get("full") or urls.get("small")
+            if img_url:
+                image_urls.append(img_url)
+                
+        return {
+            "success": True,
+            "source": "Unsplash",
+            "count": len(image_urls),
+            "image_urls": image_urls
+        }
+    except Exception as e:
+        return {"error": f"Unsplash search failed: {str(e)}"}
+
+
+def search_pexels(query: str, api_key: str, num_results: int = 5) -> dict:
+    """Search Pexels API for high-quality images."""
+    try:
+        url = "https://api.pexels.com/v1/search"
+        params = {
+            "query": query,
+            "per_page": num_results,
+            "orientation": "landscape",
+        }
+        headers = {"Authorization": api_key}
+        
+        with httpx.Client() as client:
+            resp = client.get(url, params=params, headers=headers, timeout=10.0)
+            if resp.status_code == 401:
+                return {"error": "Invalid Pexels API key"}
+            resp.raise_for_status()
+            data = resp.json()
+            
+        photos = data.get("photos", [])
+        image_urls = []
+        for photo in photos:
+            src = photo.get("src", {})
+            # Get large2x or large (good quality)
+            img_url = src.get("large2x") or src.get("large") or src.get("original")
+            if img_url:
+                image_urls.append(img_url)
+                
+        return {
+            "success": True,
+            "source": "Pexels",
+            "count": len(image_urls),
+            "image_urls": image_urls
+        }
+    except Exception as e:
+        return {"error": f"Pexels search failed: {str(e)}"}
+
+
+def search_image_url(query: str, num_results: int = 5) -> dict:
+    """Search for direct image URLs related to a query.
+
+    This tool performs a web search and attempts to extract direct image links
+    from the results, making it easier to find textures or reference images.
+
+    Args:
+        query: Search query (e.g. "brick texture", "cat photo")
+        num_results: Max number of image URLs to return
+
+    Returns:
+        Dict with list of image URLs
+    """
+    # 0. Check for API keys (Best Practice)
+    # If user has configured Unsplash or Pexels, use them for high-quality results
+    if preferences:
+        prefs = preferences.get_preferences()
+        if prefs:
+            unsplash_key = getattr(prefs, "unsplash_api_key", "").strip()
+            pexels_key = getattr(prefs, "pexels_api_key", "").strip()
+            
+            # Try Unsplash first
+            if unsplash_key:
+                print(f"[Web] Using Unsplash API for '{query}'")
+                res = search_unsplash(query, unsplash_key, num_results)
+                if res.get("success") and res.get("image_urls"):
+                    return res
+                elif "error" in res:
+                    print(f"[Web] Unsplash error: {res['error']}")
+            
+            # Try Pexels second
+            if pexels_key:
+                print(f"[Web] Using Pexels API for '{query}'")
+                res = search_pexels(query, pexels_key, num_results)
+                if res.get("success") and res.get("image_urls"):
+                    return res
+                elif "error" in res:
+                    print(f"[Web] Pexels error: {res['error']}")
+
+    # Fallback: Web Scraping
+    # Enhance query to target images
+    search_query = f"{query} image"
+    
+    # 1. Perform web search
+    # Fetch more results to increase chance of finding direct images or good pages
+    search_res = web_search(search_query, num_results=min(num_results * 3, 20))
+    if "error" in search_res:
+        return search_res
+        
+    results = search_res.get("results", [])
+    image_urls = []
+    
+    # 2. Process results - First pass: Direct image links
+    # We prioritize direct links as they are fastest and most reliable
+    for res in results:
+        url = res.get("url", "")
+        if not url:
+            continue
+            
+        # Check if direct image link
+        lower_url = url.lower().split("?")[0]
+        if any(lower_url.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+            if url not in image_urls:
+                image_urls.append(url)
+        
+        if len(image_urls) >= num_results:
+            break
+            
+    # 3. Process results - Second pass: Extract from pages
+    # If we don't have enough images, scrape the pages
+    if len(image_urls) < num_results:
+        for res in results:
+            url = res.get("url", "")
+            if not url:
+                continue
+                
+            # Skip if already added
+            if url in image_urls:
+                continue
+                
+            # Skip if it looks like a direct image link (already handled or failed check)
+            lower_url = url.lower().split("?")[0]
+            if any(lower_url.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                continue
+
+            # Extract images from page
+            # We limit max_images per page to avoid clutter, but try more pages
+            extracted = extract_image_urls(url, max_images=5)
+            if extracted.get("success"):
+                new_imgs = extracted.get("images", [])
+                for img in new_imgs:
+                    if img not in image_urls:
+                        image_urls.append(img)
+                        if len(image_urls) >= num_results:
+                            break
+            
+            if len(image_urls) >= num_results:
+                break
+            
+    return {
+        "success": True,
+        "query": query,
+        "count": len(image_urls),
+        "image_urls": image_urls[:num_results],
+        "hint": "Use download_image_as_texture(url) to use one of these images."
+    }
+
+
 def register():
     """Register all web tools with the MCP registry."""
 
@@ -793,6 +1008,28 @@ def register():
                     "default": 5,
                     "minimum": 1,
                     "maximum": 10,
+                },
+            },
+            "required": ["query"],
+        },
+        category="Web",
+    )
+
+    tool_registry.register_tool(
+        "search_image_url",
+        search_image_url,
+        "Search for direct image URLs related to a query (useful for finding textures or reference images)",
+        {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query (e.g. 'brick texture', 'cat photo')",
+                },
+                "num_results": {
+                    "type": "integer",
+                    "description": "Max number of image URLs to return (default: 5)",
+                    "default": 5,
                 },
             },
             "required": ["query"],

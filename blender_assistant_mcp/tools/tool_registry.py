@@ -420,6 +420,28 @@ def get_tools_list() -> List[Dict[str, Any]]:
     ]
 
 
+def get_tool_schema(name: str) -> Dict[str, Any]:
+    """Get the schema definition for a single tool.
+    
+    Args:
+        name: Tool name
+        
+    Returns:
+        Tool definition dict or None if not found
+    """
+    if name not in _TOOLS:
+        return None
+        
+    tool = _TOOLS[name]
+    return {
+        "name": name,
+        "description": tool["description"],
+        "inputSchema": tool["inputSchema"],
+        "category": tool.get("category", "Other"),
+    }
+
+
+
 def get_tools_schema(enabled_tools: List[str] = None) -> str:
     """Return a compact tools cheat-sheet for the system prompt.
 

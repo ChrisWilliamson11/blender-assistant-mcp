@@ -260,12 +260,41 @@ class OllamaSubprocess:
                 else:
                     return json.loads(response.read().decode("utf-8"))
 
-    def generate_embedding(self, model: str, text: str):
+    def pull_model(self, model: str):
+        """Pull a model from the Ollama library."""
+        if not self.is_running():
+            return False
+            
+        print(f"[Ollama] Pulling model {model}...")
+        try:
+            # Use subprocess to pull so we can see progress or at least block until done
+            import subprocess
+            
+            # Use startupinfo to hide console window on Windows
+            startupinfo = None
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                
+            subprocess.run(
+                [self.binary_path, "pull", model], 
+                check=True,
+                startupinfo=startupinfo,
+                capture_output=True # Capture output to avoid spamming console
+            )
+            print(f"[Ollama] Successfully pulled {model}")
+            return True
+        except Exception as e:
+            print(f"[Ollama] Failed to pull {model}: {e}")
+            return False
+
+    def generate_embedding(self, model: str, text: str, keep_alive: str = "5m"):
         """Generate embeddings using Ollama.
 
         Args:
             model: Embedding model name (e.g., "nomic-embed-text")
             text: Text to embed
+            keep_alive: How long to keep model loaded (default "5m")
 
         Returns:
             List of floats (embedding vector)
@@ -273,11 +302,27 @@ class OllamaSubprocess:
         if not self.is_running():
             raise RuntimeError("Ollama server is not running")
 
+        # Check if model exists, if not try to pull
+        if not self.is_model_loaded(model):
+            # is_model_loaded checks running models. We need to check available models.
+            available = self.list_models()
+            model_exists = False
+            for m in available:
+                if m.get("name") == model or m.get("name", "").startswith(model + ":"):
+                    model_exists = True
+                    break
+            
+            if not model_exists:
+                print(f"[Ollama] Model {model} not found. Attempting to pull...")
+                if not self.pull_model(model):
+                    print(f"[Ollama] Failed to pull embedding model {model}")
+                    return []
+
         url = f"{self.base_url}/api/embed"
         payload = {
             "model": model,
             "input": text,
-            "keep_alive": "5m",  # Keep embedding model loaded for 5 minutes
+            "keep_alive": keep_alive,
         }
 
         data = json.dumps(payload).encode("utf-8")
@@ -285,8 +330,12 @@ class OllamaSubprocess:
         req.add_header("Content-Type", "application/json")
 
         # Increase timeout to 120s - first load can be slow if chat model is loaded
-        with urllib.request.urlopen(req, timeout=120) as response:
-            result = json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            print(f"[Ollama] Embedding request failed: {e}")
+            return []
 
         # Return first embedding (Ollama returns list of embeddings)
         embeddings = result.get("embeddings")
