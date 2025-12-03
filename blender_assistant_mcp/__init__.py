@@ -32,6 +32,8 @@ from .tools import (
     stock_photo_tools,
     web_tools,
     memory_tools,
+    task_tools,
+    research_tools,
 )
 from . import (
     preferences,
@@ -52,6 +54,8 @@ _modules = [
     ui,
     web_tools,
     memory_tools,
+    task_tools,
+    research_tools,
     assistant,
 ]
 

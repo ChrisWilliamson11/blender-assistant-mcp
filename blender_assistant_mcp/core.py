@@ -77,31 +77,82 @@ class ResponseParser:
 
     @staticmethod
     def _parse_json_blocks(content: str) -> List[ToolCall]:
-        """Extract tool calls from JSON blocks in markdown."""
+        """Extract tool calls from JSON blocks in markdown or raw text."""
         tool_calls = []
         
-        # Try to extract JSON blocks from markdown
+        # Helper to extract balanced JSON objects
+        def extract_balanced_objects(text: str) -> List[str]:
+            objects = []
+            brace_count = 0
+            start_index = -1
+            i = 0
+            length = len(text)
+            
+            while i < length:
+                char = text[i]
+                
+                # Handle strings to ignore braces inside them
+                if char == '"':
+                    # Check for triple quote
+                    if i + 2 < length and text[i:i+3] == '"""':
+                        i += 3
+                        # Find end of triple quote
+                        while i + 2 < length:
+                            if text[i:i+3] == '"""' and text[i-1] != '\\':
+                                i += 3
+                                break
+                            i += 1
+                        continue
+                    else:
+                        # Normal string
+                        i += 1
+                        while i < length:
+                            if text[i] == '"' and text[i-1] != '\\':
+                                i += 1
+                                break
+                            i += 1
+                        continue
+                
+                # Count braces
+                if char == '{':
+                    if brace_count == 0:
+                        start_index = i
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0 and start_index != -1:
+                        objects.append(text[start_index:i+1])
+                        start_index = -1
+                
+                i += 1
+                
+            return objects
+
+        # 1. Try markdown blocks first (they are usually well-formed)
         json_blocks = re.findall(r"```json\s*(\{.*?\})\s*```", content, re.DOTALL)
         
-        # If no markdown blocks, look for raw JSON objects
+        # 2. If no markdown blocks, use robust extraction
         if not json_blocks:
-            # Simple brace matching for standalone JSON
-            matches = re.findall(r"(\{[\s\S]*?\})", content)
-            for m in matches:
-                if '"name"' in m and '"arguments"' in m:
-                    json_blocks.append(m)
+            json_blocks = extract_balanced_objects(content)
 
         for block in json_blocks:
             try:
                 data = json.loads(block)
-                # Check for standard tool call format: {"name": "...", "arguments": {...}}
                 if "name" in data and "arguments" in data:
                     tool_calls.append(ToolCall(tool=data["name"], args=data["arguments"]))
-                # Check for alternative format: {"tool": "...", "args": {...}}
                 elif "tool" in data and "args" in data:
                     tool_calls.append(ToolCall(tool=data["tool"], args=data["args"]))
             except json.JSONDecodeError:
-                pass
+                # Fallback: Try parsing as Python literal
+                try:
+                    data = ast.literal_eval(block)
+                    if isinstance(data, dict):
+                        if "name" in data and "arguments" in data:
+                            tool_calls.append(ToolCall(tool=data["name"], args=data["arguments"]))
+                        elif "tool" in data and "args" in data:
+                            tool_calls.append(ToolCall(tool=data["tool"], args=data["args"]))
+                except:
+                    pass
                 
         return tool_calls
 
@@ -184,8 +235,26 @@ class AssistantSession:
             "- **LEARN**: Use `remember_learning` to record pitfalls or version quirks.\n\n"
             "TOOLS\n"
             f"{compact_tools}\n"
-            f"{sdk_hints}"
+            f"{compact_tools}\n"
+            f"{sdk_hints}\n\n"
+            "PROTOCOL & BEHAVIORAL RULES\n"
+            f"{self._load_protocol()}"
         )
+
+    def _load_protocol(self) -> str:
+        """Load the agentic protocol from protocol.md."""
+        try:
+            import os
+            # Assume protocol.md is in the same directory as this file (core.py)
+            protocol_path = os.path.join(os.path.dirname(__file__), "protocol.md")
+            if os.path.exists(protocol_path):
+                with open(protocol_path, "r", encoding="utf-8") as f:
+                    return f.read()
+        except Exception as e:
+            print(f"[Assistant] Failed to load protocol.md: {e}")
+        
+        # Fallback if file missing
+        return "Follow standard coding best practices."
 
     def process_response(self, response: Dict[str, Any]) -> List[ToolCall]:
         """Process a raw response from the LLM."""

@@ -435,22 +435,96 @@ def run_sample_report(api_zip: str | None, manual_zip: str | None, size_api: int
 
 def generate_embeddings_ollama(texts: List[str], model: str = EMBED_MODEL, progress_interval: int = 25, verbose: bool = False) -> List[List[float]]:
     print(f"=== Generating embeddings with Ollama ({model}) ===")
+    
+    # Load cache
+    cache_file = TEMP_DIR / "embeddings_cache.json"
+    cache = {}
+    if cache_file.exists():
+        try:
+            cache = json.loads(cache_file.read_text(encoding='utf-8'))
+            print(f"✓ Loaded {len(cache)} cached embeddings")
+        except Exception:
+            print("⚠ Failed to load embedding cache")
+
+    import hashlib
+    
     embs: List[List[float]] = []
     total = len(texts)
+    
+    # Session for connection pooling
+    session = requests.Session()
+    
+    # Track changes for periodic save
+    new_embeddings_count = 0
+    
     for i, t in enumerate(texts, 1):
+        # Check cache first
+        text_hash = hashlib.md5(t.encode('utf-8')).hexdigest()
+        if text_hash in cache:
+            embs.append(cache[text_hash])
+            if verbose or (progress_interval > 0 and (i % progress_interval == 0 or i == total)):
+                print(f"[embed] {i}/{total} (cached)")
+            continue
+
         if verbose or (progress_interval > 0 and (i % progress_interval == 0 or i == total)):
             print(f"[embed] {i}/{total}")
-        try:
-            resp = requests.post(
-                "http://localhost:11434/api/embeddings",
-                json={"model": model, "prompt": t},
-                timeout=45,
-            )
-            resp.raise_for_status()
-            embs.append(resp.json().get('embedding', [0.0] * 768))
-        except Exception as e:
-            print(f"  ⚠ embedding failed @ {i}: {e}")
+            
+        # Retry logic
+        max_retries = 3
+        success = False
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                resp = session.post(
+                    "http://localhost:11434/api/embeddings",
+                    json={"model": model, "prompt": t},
+                    timeout=60,  # Increased timeout
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                embedding = data.get('embedding')
+                
+                if not embedding:
+                    raise ValueError("No embedding returned in response")
+                    
+                embs.append(embedding)
+                
+                # Update cache
+                cache[text_hash] = embedding
+                new_embeddings_count += 1
+                success = True
+                
+                # Small sleep to prevent overwhelming the server
+                time.sleep(0.02) 
+                break
+                
+            except Exception as e:
+                last_error = e
+                # If 500 error or connection error, wait and retry
+                wait_time = (attempt + 1) * 2  # 2s, 4s, 6s
+                print(f"  ⚠ retry {attempt+1}/{max_retries} @ {i} after {wait_time}s: {e}")
+                time.sleep(wait_time)
+        
+        if not success:
+            print(f"  ⚠ embedding failed @ {i}: {last_error}")
             embs.append([0.0] * 768)
+            
+        # Periodically save cache
+        if new_embeddings_count > 0 and new_embeddings_count % 50 == 0:
+            try:
+                cache_file.write_text(json.dumps(cache), encoding='utf-8')
+            except Exception:
+                pass
+                
+    # Final save
+    if new_embeddings_count > 0:
+        try:
+            cache_file.write_text(json.dumps(cache), encoding='utf-8')
+            print(f"✓ Saved {len(cache)} embeddings to cache")
+        except Exception:
+            pass
+            
     return embs
 
 
@@ -598,25 +672,7 @@ def build(
     print("Blender RAG Database Builder (current)")
     print("=" * 60)
 
-    # Acquire docs: from ZIPs if provided, otherwise crawl
-    api_dir = TEMP_DIR / "api"; manual_dir = TEMP_DIR / "manual"
-    if api_zip:
-        print(f"=== Using API ZIP: {api_zip}")
-        api_files = enumerate_zip_html(api_zip, api_dir, "API")
-    else:
-        api_files = crawl_site(API_BASE, api_dir)
-
-    if manual_zip:
-        print(f"=== Using Manual ZIP: {manual_zip}")
-        manual_files = enumerate_zip_html(manual_zip, manual_dir, "Manual")
-    else:
-        manual_files = crawl_site(MANUAL_BASE, manual_dir)
-
-    all_files = api_files + manual_files
-    if not all_files:
-        raise RuntimeError("No documentation sources found (ZIPs empty or crawl returned none)")
-
-    # Extract + chunk (or reuse)
+    # Try to load cached chunks first if requested
     documents: List[Dict] = []
     if reuse_chunks and (CHUNKS_CACHE.exists()):
         print("=== Reusing chunk cache ===")
@@ -630,6 +686,28 @@ def build(
                 print(f"✓ Loaded {len(documents)} cached chunks")
         except Exception as e:
             print(f"  ⚠ failed to load chunk cache, falling back to re-chunking: {e}")
+
+    # If no documents from cache, acquire from source
+    if not documents:
+        # Acquire docs: from ZIPs if provided, otherwise crawl
+        api_dir = TEMP_DIR / "api"; manual_dir = TEMP_DIR / "manual"
+        if api_zip:
+            print(f"=== Using API ZIP: {api_zip}")
+            api_files = enumerate_zip_html(api_zip, api_dir, "API")
+        else:
+            api_files = crawl_site(API_BASE, api_dir)
+    
+        if manual_zip:
+            print(f"=== Using Manual ZIP: {manual_zip}")
+            manual_files = enumerate_zip_html(manual_zip, manual_dir, "Manual")
+        else:
+            manual_files = crawl_site(MANUAL_BASE, manual_dir)
+    
+        all_files = api_files + manual_files
+        if not all_files:
+            raise RuntimeError("No documentation sources found (ZIPs empty or crawl returned none)")
+
+
 
     if not documents:
         print("=== Processing documentation ===")
@@ -659,6 +737,11 @@ def build(
                 page_type = feats.get('page_type', 'manual_article')
 
                 # Filtering include/exclude
+                if base == "icons.html":
+                    if verbose:
+                        print(f"[skip] {base} excluded (explicit skip)")
+                    continue
+
                 if page_type in exc:
                     if verbose:
                         print(f"[skip] {base} excluded (type={page_type})")

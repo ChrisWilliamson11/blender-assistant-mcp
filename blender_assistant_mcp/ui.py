@@ -1086,8 +1086,28 @@ class ASSISTANT_OT_remember_chat(bpy.types.Operator):
             except Exception as e:
                 print(f"[Remember Chat] Error: {e}")
 
+        # Extract message data in main thread
+        history_data = []
+        for msg in session.messages:
+            history_data.append({"role": msg.role, "content": msg.content})
+
+        def _worker_wrapper():
+            # Run the original logic
+            _worker()
+            
+            # Run abstract generation
+            try:
+                from .memory import MemoryManager
+                mm = MemoryManager()
+                print("[Remember Chat] Generating abstract...")
+                abstract = mm.create_abstract(history_data, model_name=model_name)
+                if abstract:
+                    print(f"[Remember Chat] Abstract generated: {abstract}")
+            except Exception as e:
+                print(f"[Remember Chat] Abstract generation failed: {e}")
+
         # Run in background thread
-        thread = threading.Thread(target=_worker, daemon=True)
+        thread = threading.Thread(target=_worker_wrapper, daemon=True)
         thread.start()
         
         self.report({"INFO"}, "Analyzing chat in background...")

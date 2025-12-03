@@ -12,6 +12,7 @@ import bpy
 
 from . import tool_registry
 from ..memory import MemoryManager
+from ..assistant_sdk import AssistantSDK
 
 _memory_manager = None
 
@@ -453,6 +454,171 @@ def get_object_info(name: str) -> dict:
     return info
 
 
+
+def _serialize_rna(data, depth: int = 1, max_depth: int = 1) -> typing.Any:
+    """Recursively serialize a Blender RNA object to a JSON-compatible dict."""
+    if depth > max_depth:
+        return str(data)
+
+    # Handle basic types
+    if data is None:
+        return None
+    if isinstance(data, (str, int, float, bool)):
+        return data
+    
+    # Handle sequences (bpy_prop_array, lists, tuples)
+    if hasattr(data, "__iter__") and not isinstance(data, (str, dict)):
+        # Limit sequence length to avoid massive output (e.g. vertices)
+        try:
+            l = len(data)
+            if l > 100:
+                return f"<Sequence length={l}>"
+            return [_serialize_rna(item, depth, max_depth) for item in data]
+        except:
+            pass
+
+    # Handle Blender Objects (ID types)
+    if hasattr(data, "rna_type"):
+        # It's a Blender struct
+        result = {"_type": data.rna_type.name}
+        
+        # If it's an ID (has a name), include it
+        if hasattr(data, "name"):
+            result["name"] = data.name
+            
+        # If we are at max depth, just return the name/type reference
+        if depth == max_depth:
+            return result
+
+        # Introspect properties
+        try:
+            for prop in data.rna_type.properties:
+                if prop.identifier in {"rna_type"}:
+                    continue
+                
+                # Skip large collections/arrays at this level unless explicitly requested?
+                # For now, we rely on the sequence length check above.
+                
+                try:
+                    val = getattr(data, prop.identifier)
+                    result[prop.identifier] = _serialize_rna(val, depth + 1, max_depth)
+                except Exception:
+                    result[prop.identifier] = "<Error>"
+        except Exception as e:
+            result["_error"] = str(e)
+            
+        return result
+
+    # Fallback
+    return str(data)
+
+
+def inspect_data(path: str, depth: int = 1) -> dict:
+    """Introspect a Blender data block and return its structure (AST-like).
+    
+    Args:
+        path: Python path to the data (e.g. "bpy.data.objects['Cube']", "bpy.context.scene")
+        depth: How deep to traverse relationships (default: 1)
+        
+    Returns:
+        Dict containing the serialized data structure.
+    """
+    try:
+        # Resolve path
+        # We use the persistent namespace to resolve 'bpy'
+        namespace = _get_code_namespace()
+        
+        # Security/Safety check: only allow access to bpy
+        if not path.startswith("bpy."):
+             return {"error": "Path must start with 'bpy.'"}
+
+        try:
+            # Eval the path to get the object
+            obj = eval(path, namespace, namespace)
+        except Exception as e:
+            return {"error": f"Failed to resolve path '{path}': {str(e)}"}
+            
+        # Serialize
+        return {
+            "path": path,
+            "data": _serialize_rna(obj, 0, depth)
+        }
+        
+    except Exception as e:
+        return {"error": f"Inspection failed: {str(e)}"}
+
+
+def search_data(root_path: str, filter_props: dict = None, max_results: int = 10) -> dict:
+    """Search for data blocks matching specific criteria (AST-grep like).
+    
+    Args:
+        root_path: Path to a collection (e.g. "bpy.data.objects")
+        filter_props: Dict of property=value to match (e.g. {"type": "MESH", "hide_viewport": False})
+        max_results: Max number of matches to return
+        
+    Returns:
+        List of matches with summaries.
+    """
+    try:
+        namespace = _get_code_namespace()
+        
+        if not root_path.startswith("bpy."):
+             return {"error": "Root path must start with 'bpy.'"}
+             
+        try:
+            root = eval(root_path, namespace, namespace)
+        except Exception as e:
+            return {"error": f"Failed to resolve root '{root_path}': {str(e)}"}
+            
+        # Ensure root is iterable
+        if not hasattr(root, "__iter__"):
+            return {"error": f"Root '{root_path}' is not iterable"}
+            
+        matches = []
+        count = 0
+        
+        for item in root:
+            match = True
+            if filter_props:
+                for key, target_val in filter_props.items():
+                    # Support nested keys? e.g. "data.materials"
+                    # For now, simple attributes
+                    try:
+                        val = getattr(item, key, None)
+                        if val != target_val:
+                            match = False
+                            break
+                    except:
+                        match = False
+                        break
+            
+            if match:
+                # Create a summary
+                summary = {
+                    "name": getattr(item, "name", str(item)),
+                    "type": getattr(item, "type", "Unknown") if hasattr(item, "type") else type(item).__name__
+                }
+                # Add the filtered props to summary for confirmation
+                if filter_props:
+                    for k in filter_props:
+                        summary[k] = getattr(item, k, None)
+                        
+                matches.append(summary)
+                count += 1
+                if count >= max_results:
+                    break
+                    
+        return {
+            "root": root_path,
+            "filter": filter_props,
+            "count": len(matches),
+            "matches": matches
+        }
+
+    except Exception as e:
+        return {"error": f"Search failed: {str(e)}"}
+
+
 # Persistent namespace for execute_code (maintains state between calls)
 _CODE_NAMESPACE = None
 
@@ -489,7 +655,8 @@ def _get_code_namespace():
             "help": help,
             "dir": dir,
             "globals": lambda: _CODE_NAMESPACE,
-            "assistant_sdk": _get_assistant_sdk(),
+            "globals": lambda: _CODE_NAMESPACE,
+            "assistant_sdk": AssistantSDK(),
         }
 
         # Install a robust importable shim module
@@ -531,6 +698,8 @@ def _get_code_namespace():
                 "stock_photos",
                 "web",
                 "rag",
+                "research",
+                "memory",
             ]:
                 if hasattr(sdk_obj, category):
                     cat_obj = getattr(sdk_obj, category)
@@ -794,6 +963,11 @@ def capture_viewport_for_vision(
 
             # Resolve vision model from preferences or override
             model_name = vision_model or ""
+            
+            # Handle "default" alias from LLM or preferences
+            if model_name.lower() == "default":
+                model_name = ""
+
             try:
                 if not model_name:
                     from ..preferences import get_preferences
@@ -803,6 +977,14 @@ def capture_viewport_for_vision(
                         model_name = getattr(prefs, "vision_model", "") or getattr(
                             prefs, "model_file", ""
                         )
+                        
+                        # If preference is also "default" (unlikely but possible), clear it
+                        if model_name and model_name.lower() == "default":
+                            model_name = ""
+                            
+                        # Hard fallback to minicpm-v:8b if nothing else is set
+                        if not model_name:
+                            model_name = "minicpm-v:8b"
             except Exception as e:
                 print(f"[Vision] Error reading preferences: {e}")
                 pass
@@ -1606,6 +1788,23 @@ def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
                 "sdkUsage": "assistant_sdk.sketchfab.download(uid='uid')",
                 "notes": "SDK (execute_code): Download model from Sketchfab.",
                 "returns": "{'success': bool, 'path': str?, 'message': str?}",
+            },
+            # Research
+            "research.research_topic": {
+                "sdkUsage": "assistant_sdk.research.research_topic(topic='topic')",
+                "notes": "Perform deep research on a topic using RAG, Web, and Memory.",
+                "returns": "str (Final answer)",
+            },
+            # Web
+            "web.web_search": {
+                "sdkUsage": "assistant_sdk.web.web_search(query='query', num_results=5)",
+                "notes": "Search the web (DuckDuckGo).",
+                "returns": "{'results': [{'title': str, 'url': str, 'snippet': str}], 'formatted': str}",
+            },
+            "web.fetch_webpage": {
+                "sdkUsage": "assistant_sdk.web.fetch_webpage(url='url', max_length=10000)",
+                "notes": "Fetch and extract text from a webpage.",
+                "returns": "{'success': bool, 'text': str, 'length': int}",
             },
             # RAG
             "rag.query": {

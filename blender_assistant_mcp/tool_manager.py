@@ -26,6 +26,9 @@ class ToolManager:
             "search_memory",
             "capture_viewport_for_vision",
             "rag_query",
+            "research_topic",
+            "web_search",
+            "fetch_webpage",
         }
 
     def get_enabled_tools(self, preferences=None) -> Set[str]:
