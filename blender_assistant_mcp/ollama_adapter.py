@@ -64,7 +64,7 @@ def chat_completion(
             name = msg.get("name", "tool")
             sanitized_messages.append({
                 "role": "user",
-                "content": f"[Tool Output: {name}]\n{content}"
+                "content": f"[System Tool Output: {name}]\n{content}"
             })
         else:
             sanitized_messages.append(msg)

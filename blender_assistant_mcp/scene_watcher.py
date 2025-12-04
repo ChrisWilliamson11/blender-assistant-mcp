@@ -1,5 +1,5 @@
 import bpy
-from typing import Set, Dict, List, Optional, Tuple
+from typing import Set, Dict, List, Optional, Tuple, Any
 
 class SceneWatcher:
     """Tracks changes in the Blender scene to provide context to the assistant."""
@@ -32,60 +32,61 @@ class SceneWatcher:
         
         self._initialized = True
 
-    def get_changes(self) -> List[str]:
-        """Check for changes since the last capture and return a list of natural language descriptions."""
+    def get_changes(self) -> Dict[str, Any]:
+        """Check for changes since the last capture and return a structured dict of changes."""
         if not self._initialized:
             self.capture_state()
-            return []
+            return {}
 
         if not bpy.context:
-            return []
+            return {}
 
-        changes = []
+        changes = {}
         
         # Current state
-        current_objects = {obj.name for obj in bpy.data.objects}
+        current_objects = {obj.name: obj for obj in bpy.data.objects}
+        current_object_names = set(current_objects.keys())
         current_selection = {obj.name for obj in bpy.context.selected_objects}
         active = bpy.context.active_object
         current_active = active.name if active else None
         current_mode = bpy.context.mode
 
         # 1. Object Additions/Deletions
-        added = current_objects - self.last_objects
-        removed = self.last_objects - current_objects
+        added_names = current_object_names - self.last_objects
+        removed_names = self.last_objects - current_object_names
         
-        if added:
-            changes.append(f"Objects added: {', '.join(added)}")
-        if removed:
-            changes.append(f"Objects deleted: {', '.join(removed)}")
+        if added_names:
+            # Serialize added objects so LLM knows what they are
+            from .tools.blender_tools import _get_object_summary
+            changes["added"] = []
+            for name in added_names:
+                obj = current_objects[name]
+                # Use summary to save context
+                changes["added"].append(_get_object_summary(obj))
 
-        # 2. Selection Changes (only report if objects weren't just added/removed to avoid noise)
-        # If I add a cube, it becomes selected. I don't need to say "Cube added" AND "Cube selected".
-        # So we filter selection changes to exclude newly added objects.
-        
+        if removed_names:
+            changes["removed"] = list(removed_names)
+
+        # 2. Selection Changes
         newly_selected = current_selection - self.last_selection
         deselected = self.last_selection - current_selection
         
         # Filter out added objects from "selected" report
-        newly_selected_existing = newly_selected - added
+        newly_selected_existing = newly_selected - added_names
         
         if newly_selected_existing:
-            changes.append(f"User selected: {', '.join(newly_selected_existing)}")
+            changes["selected"] = list(newly_selected_existing)
         
-        # We generally don't report deselection unless EVERYTHING was deselected
         if deselected and not current_selection:
-            changes.append("User cleared selection")
+            changes["deselected_all"] = True
 
         # 3. Active Object Change
-        if current_active != self.last_active and current_active not in added:
-            if current_active:
-                changes.append(f"Active object changed to: {current_active}")
-            else:
-                changes.append("No active object")
+        if current_active != self.last_active and current_active not in added_names:
+            changes["active"] = current_active
 
         # 4. Mode Change
         if current_mode != self.last_mode:
-            changes.append(f"Mode changed to: {current_mode}")
+            changes["mode"] = current_mode
 
         return changes
 
@@ -94,5 +95,6 @@ class SceneWatcher:
         changes = self.get_changes()
         if changes:
             self.capture_state()
-            return " ".join(changes)
+            import json
+            return json.dumps(changes)
         return ""

@@ -60,7 +60,7 @@ class BlenderRAG:
 
             # Require sharded database; no legacy fallback
             if not loaded_docs:
-                print("[RAG] Sharded RAG database not found. Build it via Preferences > RAG > Rebuild RAG Database.")
+                print("[RAG] Sharded RAG database not found.")
                 self.enabled = False
                 return False
 
@@ -216,20 +216,20 @@ class BlenderRAG:
         # Create augmented prompt - emphasize tool calling over explanation
         augmented = f"""You are a Blender automation assistant with access to tools. The user wants you to DO things in Blender, not just explain how.
 
-INTERNAL REFERENCE - BLENDER API DOCUMENTATION (for your tool calls):
-{context}
+        INTERNAL REFERENCE - BLENDER API DOCUMENTATION (for your tool calls):
+        {context}
 
-USER REQUEST:
-{user_message}
+        USER REQUEST:
+        {user_message}
 
-IMPORTANT INSTRUCTIONS:
-1. The user wants you to PERFORM the task using your available tools, not explain how to do it
-2. Use the documentation above to understand the correct Blender API calls
-3. Call the appropriate tools to accomplish the user's request
-4. Only provide explanations if the user explicitly asks "how do I..." or "explain..."
-5. Default action: DO the task using tools, don't just describe it
+        IMPORTANT INSTRUCTIONS:
+        1. The user wants you to PERFORM the task using your available tools, not explain how to do it
+        2. Use the documentation above to understand the correct Blender API calls
+        3. Call the appropriate tools to accomplish the user's request
+        4. Only provide explanations if the user explicitly asks "how do I..." or "explain..."
+        5. Default action: DO the task using tools, don't just describe it
 
-If the user asks you to create, modify, or manipulate something in Blender, use your tools to do it directly."""
+        If the user asks you to create, modify, or manipulate something in Blender, use your tools to do it directly."""
 
         return augmented
 

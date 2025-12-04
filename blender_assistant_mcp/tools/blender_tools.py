@@ -33,6 +33,7 @@ def get_scene_info(
     include_icons: bool = True,
     include_counts: bool = True,
     root_filter: str | None = None,
+    detailed: bool = False,
 ) -> dict:
     """Return an Outliner-style, persistent view of the scene (hierarchical, compact, and stateful).
 
@@ -326,6 +327,13 @@ def get_scene_info(
                 ("  " * (depth + 1))
                 + f"{o.name} [{getattr(o, 'type', '')}]{(' ' + oico_txt) if oico_txt else ''}"
             )
+            
+            # Detailed mode: populate data
+            if detailed:
+                # Use _serialize_rna but limit depth to avoid massive dumps
+                # We reuse the inspect_data logic
+                nodes[-1]["data"] = _serialize_rna(o, depth=0, max_depth=1)
+
         if has_more_objs:
             lines.append(("  " * (depth + 1)) + "... more objects")
 
@@ -407,18 +415,21 @@ def get_object_info(name: str) -> dict:
         "dimensions": [round(v, 4) for v in obj.dimensions],
         "parent": obj.parent.name if obj.parent else None,
         "collections": [c.name for c in obj.users_collection],
+        # Unified AST-like representation
+        "data": _serialize_rna(obj, depth=0, max_depth=1)
     }
 
     # Data block info
+    # Data block info
     if obj.data:
-        info["data"] = {"name": obj.data.name}
+        info["mesh_stats"] = {"name": obj.data.name}
 
         # Mesh specific
         if obj.type == "MESH":
             mesh = obj.data
-            info["data"]["vertices"] = len(mesh.vertices)
-            info["data"]["polygons"] = len(mesh.polygons)
-            info["data"]["shape_keys"] = (
+            info["mesh_stats"]["vertices"] = len(mesh.vertices)
+            info["mesh_stats"]["polygons"] = len(mesh.polygons)
+            info["mesh_stats"]["shape_keys"] = (
                 [k.name for k in mesh.shape_keys.key_blocks] if mesh.shape_keys else []
             )
 
@@ -511,6 +522,33 @@ def _serialize_rna(data, depth: int = 1, max_depth: int = 1) -> typing.Any:
 
     # Fallback
     return str(data)
+
+
+def _get_object_summary(obj) -> dict:
+    """Return a concise summary of an object for scene updates."""
+    if not obj:
+        return None
+        
+    summary = {
+        "name": obj.name,
+        "type": getattr(obj, "type", "UNKNOWN"),
+    }
+    
+    # Add transform info if available (rounded for brevity)
+    if hasattr(obj, "location"):
+        summary["location"] = [round(v, 2) for v in obj.location]
+    if hasattr(obj, "dimensions"):
+        summary["dimensions"] = [round(v, 2) for v in obj.dimensions]
+        
+    # Hierarchy info
+    if getattr(obj, "parent", None):
+        summary["parent"] = obj.parent.name
+        
+    # Collection info
+    if hasattr(obj, "users_collection"):
+        summary["collections"] = [c.name for c in obj.users_collection]
+        
+    return summary
 
 
 def inspect_data(path: str, depth: int = 1) -> dict:
@@ -803,7 +841,7 @@ def execute_code(code: str) -> dict:
         result = {"executed": True, "success": True}
 
         if output:
-            result["output"] = f"[Blender Output]:\n{output.strip()}"
+            result["output"] = output.strip()
 
         # If the executed code assigned a value to 'result' or '__result__',
         # include it in the tool response for better feedback.
@@ -1759,6 +1797,16 @@ def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
                 "sdkUsage": "assistant_sdk.blender.set_material(object_name='Obj'|None, object_names=['ObjA','ObjB'], material_name='Mat'|None, color=[r,g,b(,a)])",
                 "notes": "Assign or create a material; sets Principled Base Color if 'color' specified.",
             },
+            "blender.inspect_data": {
+                "sdkUsage": "assistant_sdk.blender.inspect_data(path='bpy.data.objects[\"Cube\"]', depth=1)",
+                "notes": "Introspect a Blender data block (AST-like view).",
+                "returns": "{'path': str, 'data': dict}",
+            },
+            "blender.search_data": {
+                "sdkUsage": "assistant_sdk.blender.search_data(root_path='bpy.data.objects', filter_props={'type':'MESH'})",
+                "notes": "Search for data blocks matching criteria (AST-grep like).",
+                "returns": "{'matches': [{'name': str, ...}], 'count': int}",
+            },
             "web.images_workflow": {
                 "workflow": [
                     "# 3-STEP WORKFLOW for downloading web images:",
@@ -2398,4 +2446,52 @@ def register():
             "required": [],
         },
         category="Info",
+    )
+
+    tool_registry.register_tool(
+        "inspect_data",
+        inspect_data,
+        "Introspect a Blender data block and return its structure (AST-like). Use this to see properties of an object.",
+        {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Python path to the data (e.g. \"bpy.data.objects['Cube']\")",
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "Traversal depth (default: 1)",
+                    "default": 1,
+                },
+            },
+            "required": ["path"],
+        },
+        category="Blender",
+    )
+
+    tool_registry.register_tool(
+        "search_data",
+        search_data,
+        "Search for data blocks matching specific criteria (AST-grep like).",
+        {
+            "type": "object",
+            "properties": {
+                "root_path": {
+                    "type": "string",
+                    "description": "Path to a collection (e.g. \"bpy.data.objects\")",
+                },
+                "filter_props": {
+                    "type": "object",
+                    "description": "Key-value pairs to match (e.g. {\"type\": \"MESH\"})",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max results to return",
+                    "default": 10,
+                },
+            },
+            "required": ["root_path"],
+        },
+        category="Blender",
     )

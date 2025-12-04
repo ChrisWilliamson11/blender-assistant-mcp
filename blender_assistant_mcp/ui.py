@@ -33,7 +33,7 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Assistant"
-    bl_label = "MCP Assistant"
+    bl_label = "Assistant"
 
     def draw(self, context):
         layout = self.layout

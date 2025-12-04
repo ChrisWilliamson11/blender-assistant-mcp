@@ -228,7 +228,7 @@ class AssistantSession:
             "  1. **Native Tools**: Call these directly (e.g., `get_scene_info`).\n"
             "  2. **Python Code**: Use `execute_code` to run scripts. Use this for `assistant_sdk.*` methods and raw `bpy` commands.\n"
             "- **FINDING TOOLS**: Do not guess tool names. Use `assistant_help` to find SDK methods, `rag_query` for docs, or `search_memory` for past solutions.\n"
-            "- **SCENE AWARENESS**: 'SCENE UPDATES' show a diff of what changed since the last turn (added/deleted objects, selection changes). Use `get_scene_info` for a full snapshot.\n"
+            "- **SCENE AWARENESS**: 'SCENE UPDATES' provide a SUMMARY of changes (added/modified objects). Use `inspect_data` or `get_scene_info(detailed=True)` to fetch detailed properties (like vertices, modifiers, or custom props) if needed.\n"
             "- **CLEANUP**: Keep the scene organized. Use collections to group new objects.\n"
             "- **VERIFY**: Always verify your actions.\n"
             "- **TEST OVER GUESS**: If unsure about API behavior, write a small test script using `execute_code` instead of speculating.\n"
