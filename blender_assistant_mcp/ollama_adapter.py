@@ -117,7 +117,7 @@ def chat_completion(
         if "keep_alive" in kwargs:
             payload["keep_alive"] = kwargs["keep_alive"]
 
-        # Optional: native tools for supported models
+        # Optional: MCP tools for supported models
         if tools:
             payload["tools"] = tools
 
@@ -228,7 +228,7 @@ def chat_completion(
         try:
             result = _do_request(payload)
         except urllib.error.HTTPError as he:
-            # Some models (e.g., Gemma) don't support native tools. Retry once without tools on 400.
+            # Some models (e.g., Gemma) don't support MCP tools. Retry once without tools on 400.
             # Also, some models don't support 'think' and will 400; retry once without 'think'.
             body = None
             try:
@@ -280,7 +280,7 @@ def chat_completion(
                     "error": f"Ollama request failed: HTTP Error {he.code}: {body or he.reason}"
                 }
 
-        # Extract content from Ollama response and return message too for native tool-calls
+        # Extract content from Ollama response and return message too for MCP tool-calls
         if "message" in result:
             content = result["message"].get("content", "")
             tool_calls = result["message"].get("tool_calls", [])

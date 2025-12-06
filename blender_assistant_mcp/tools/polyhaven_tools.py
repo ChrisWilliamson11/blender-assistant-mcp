@@ -507,7 +507,7 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
             links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
         y_offset -= 300
 
-    # Bump map (alternative to normal map)
+    # Bump map (alterMCP to normal map)
     elif "Bump" in texture_maps:
         tex = load_image_node(texture_maps["Bump"], "Bump", -600, y_offset, is_data=True)
         if tex:

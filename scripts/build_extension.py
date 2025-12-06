@@ -96,6 +96,7 @@ EXCLUDED_PATH_PATTERNS = (
 
 # Packaging options
 INCLUDE_RAG_DB = True
+EXCLUDE_BIN = False
 
 
 def should_exclude_path(root: Path, name: str, is_dir: bool) -> bool:
@@ -109,6 +110,8 @@ def should_exclude_path(root: Path, name: str, is_dir: bool) -> bool:
         # Allow including rag_db when configured
         if name == "rag_db" and INCLUDE_RAG_DB:
             return False
+        if name == "bin" and EXCLUDE_BIN:
+            return True
         if name in EXCLUDED_DIR_NAMES:
             return True
 
@@ -221,9 +224,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         help="Include rag_db folder in the package (excluded by default).",
     )
 
+    parser.add_argument(
+        "--exclude-bin",
+        action="store_true",
+        help="Exclude 'bin' folder (used for lightweight releases).",
+    )
+
     args = parser.parse_args(list(argv) if argv is not None else None)
     global INCLUDE_RAG_DB
     INCLUDE_RAG_DB = args.include_rag_db
+    global EXCLUDE_BIN
+    EXCLUDE_BIN = args.exclude_bin
 
     if not SOURCE_DIR.exists():
         print(f"Error: Source directory not found: {SOURCE_DIR}", file=sys.stderr)
@@ -233,7 +244,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 2
 
     ext_id, version = read_manifest_id_version(MANIFEST_PATH)
-    output_name = f"{ext_id}-{version}.zip"
+    
+    # Suffix for lite builds
+    suffix = "-lite" if EXCLUDE_BIN else ""
+    output_name = f"{ext_id}-{version}{suffix}.zip"
     args.output_dir.mkdir(parents=True, exist_ok=True)
     output_file = args.output_dir / output_name
 

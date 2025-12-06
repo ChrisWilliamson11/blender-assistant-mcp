@@ -138,7 +138,7 @@ def main():
         active_mcp_set = tool_manager.get_enabled_tools(None) 
         core_tools = {"execute_code", "assistant_help"}
         
-        # Native Tools (Intersection)
+        # MCP Tools (Intersection)
         injected_tools = universe.intersection(active_mcp_set.union(core_tools))
         
         # SDK Hints (The rest)
@@ -160,7 +160,7 @@ def main():
             f"You are the {agent.name}.\n"
             f"{agent.system_prompt}\n\n"
             "(CONTEXT WOULD GO HERE)\n\n"
-            f"AVAILABLE TOOLS (Native):\n{tools_text}\n\n"
+            f"AVAILABLE TOOLS (MCP):\n{tools_text}\n\n"
             f"{sdk_hints}\n\n"
             "Your goal is to solve the user's query efficiently. "
             "Use your tools."

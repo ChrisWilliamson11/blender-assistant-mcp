@@ -1234,7 +1234,9 @@ class ASSISTANT_OT_copy_debug_conversation(bpy.types.Operator):
         try:
             from . import assistant, ollama_subprocess
 
-            enabled_tools = assistant.get_schema_tools()
+            # Use ToolManager with prefs to get actual enabled tools
+            tm = assistant.ToolManager()
+            enabled_tools = list(tm.get_enabled_tools(prefs))
             tool_count = len(enabled_tools)
             ollama = ollama_subprocess.get_ollama()
             ollama_running = bool(ollama.is_running())

@@ -28,8 +28,8 @@ class ResponseParser:
     @classmethod
     def parse(cls, response: Dict[str, Any]) -> List[ToolCall]:
         """Parse a raw LLM response dict into a list of ToolCall objects."""
-        # 1. Native tool calls (OpenAI/Ollama format)
-        tool_calls = cls._parse_native_calls(response)
+        # 1. MCP tool calls (OpenAI/Ollama format)
+        tool_calls = cls._parse_MCP_calls(response)
         if tool_calls:
             return tool_calls
 
@@ -48,15 +48,15 @@ class ResponseParser:
         return cls._parse_code_blocks(content)
 
     @staticmethod
-    def _parse_native_calls(response: Dict[str, Any]) -> List[ToolCall]:
-        """Extract native tool calls from the response."""
+    def _parse_MCP_calls(response: Dict[str, Any]) -> List[ToolCall]:
+        """Extract MCP tool calls from the response."""
         tool_calls = []
         message = response.get("message", {})
         if not isinstance(message, dict):
             return []
 
-        native_calls = message.get("tool_calls", [])
-        for call in native_calls:
+        MCP_calls = message.get("tool_calls", [])
+        for call in MCP_calls:
             func = call.get("function", {})
             name = func.get("name")
             args = func.get("arguments", {})
@@ -197,10 +197,7 @@ class AssistantSession:
         self.state = "IDLE" # IDLE, THINKING, EXECUTING, DONE
         self.last_error = None
         
-        # Load enabled tools (MANAGER ROLE)
-        # The main assistant is now the MANAGER and cannot EXECUTE code directly.
-        # It must delegate to TASK_AGENT.
-        self.enabled_tools = self.tool_manager.get_enabled_tools_for_role("MANAGER")
+
 
         # Register consult_specialist tool
         tool_registry.register_tool(
@@ -225,57 +222,54 @@ class AssistantSession:
             category="System"
         )
 
-    def add_message(self, role: str, content: str, name: str = None, images: List[str] = None):
+    def add_message(self, role: str, content: str, name: str = None, images: List[str] = None, tool_calls: List[Dict] = None):
         """Add a message to history."""
         msg = {"role": role, "content": content}
         if name:
             msg["name"] = name
         if images:
             msg["images"] = images
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
         self.history.append(msg)
         
         # Prune history if too long (simple sliding window)
         if len(self.history) > 50:
             self.history = self.history[-50:]
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, enabled_tools: set) -> str:
         """Build the system prompt based on enabled tools."""
-        mcp_tools = self.tool_manager.get_compact_tool_list(self.enabled_tools)
-        
         # Get Allowed tools (Universe) to filter hints correctly
         allowed_tools = self.tool_manager.get_allowed_tools_for_role("MANAGER")
         
         # Generate hints for disabled tools (SDK Mode support)
         # Sdk Hints = Allowed - Enabled
-        sdk_hints = self.tool_manager.get_system_prompt_hints(self.enabled_tools, allowed_tools=allowed_tools)
+        sdk_hints = self.tool_manager.get_system_prompt_hints(enabled_tools, allowed_tools=allowed_tools)
         
         memory_context = self.memory_manager.get_context()
         if not memory_context:
             memory_context = "(No memories yet)"
         
         # Check for scene changes
-        scene_changes = self.scene_watcher.consume_changes()
-        scene_context = ""
-        if scene_changes:
-            scene_context = f"SCENE UPDATES (Since last turn)\n{scene_changes}\n\n"
-
+        raw_changes = self.scene_watcher.consume_changes()
+        if raw_changes:
+            scene_context = f"Scene Changes (Since last turn):\n{raw_changes}"
+        else:
+            scene_context = "Scene Changes: (no scene changes since last turn)"
 
         return f"""You are the Manager Agent (The "Brain").
-GOAL: Plan, delegate, and track complex Blender tasks.
+GOAL: Plan, delegate, and track complex Blender tasks. If the task is very simple (a '1 liner') complete it with execute_code & bpy.
 CONTEXT:
 - Memory: {memory_context}
-- Scene Changes: {scene_changes}
+- {scene_context}
 
 {self.tool_manager.get_common_behavior_prompt()}
-
-TOOLS
-{mcp_tools}
 
 {sdk_hints}
 
 RULES:
-1. Use `consult_specialist(role="TASK_AGENT", ...)` for ALL Blender work other than the absolute simplest
-2. You MAY use `execute_code` to call `assistant_sdk` methods (e.g., `assistant_sdk.task.add(...)`) if the native tool is unavailable.
+1. Use `consult_specialist(role="TASK_AGENT", ...)` for ALL Blender work other than the absolute simplest.
+2. You MAY use `execute_code` to call `assistant_sdk` methods (e.g., `assistant_sdk.task.add(...)`) if the MCP tool is unavailable.
 3. Verify work using `consult_specialist(role="COMPLETION_AGENT", ...)` before marking tasks DONE.
 4. Keep `task_list` updated.
 5. If the user asks for a simple quick action, you may still delegate it to TASK_AGENT.
@@ -286,7 +280,6 @@ CHAT PARTICIPANTS
 - **Task Agent**: The worker who executes code/tools.
 - **Completion Agent**: Verifier.
 
-{scene_context}
 MEMORY
 {memory_context}
 
@@ -318,12 +311,12 @@ PROTOCOL & BEHAVIORAL RULES
             # Re-using the logic from __init__ (simplified)
             pkg = __name__.split(".")[0]
             prefs = bpy.context.preferences.addons[pkg].preferences
-            return prefs.model_file # Assuming 'model_file' is the property name
+            return getattr(prefs, "model_file", self.model_name)
         except Exception:
              # Fallback to the one passed in Init if prefs fail, or None
              return self.model_name
              
-    def process_response(self, response: Dict[str, Any]) -> List[ToolCall]:
+    def process_response(self, response: Dict[str, Any], enabled_tools: set) -> List[ToolCall]:
         """Process a raw response from the LLM."""
         # Extract thinking/content for history
         message = response.get("message", {})
@@ -339,22 +332,25 @@ PROTOCOL & BEHAVIORAL RULES
         calls = ResponseParser.parse(response)
         
         # Add assistant message to history if there is content OR tool calls
-        # Note: We store the raw tool_calls in the history for the API to see
-        if content or tool_calls:
-            # If we have native tool calls, we should include them in the message object
-            msg = {"role": "assistant", "content": content}
-            if tool_calls:
-                msg["tool_calls"] = tool_calls
-            self.history.append(msg)
-            # Prune history
-            if len(self.history) > 50:
-                self.history = self.history[-50:]
-        
-        # Queue valid calls
+        if content or calls:
+            self.add_message(
+                "assistant", 
+                content, 
+                tool_calls=message.get("tool_calls") # Original MCP calls for history
+            )
+            
+        # Validate calls against enabled tools
         valid_calls = []
         for call in calls:
-            if call.tool in self.enabled_tools or call.tool == "execute_code":
+            if call.tool in enabled_tools or call.tool == "execute_code":
                 valid_calls.append(call)
+            elif call.tool == "python":
+                # Handle generic python blocks as execute_code
+                code = call.args.get("code", "") or call.args.get("source", "")
+                if not code and isinstance(call.args, str):
+                    code = call.args
+                
+                valid_calls.append(ToolCall(tool="execute_code", args={"code": code}))
             elif call.tool.startswith("assistant_sdk."):
                 # Auto-Translate SDK calls to execute_code
                 print(f"[Session] Auto-Translating SDK call '{call.tool}' to execute_code")
@@ -371,7 +367,7 @@ PROTOCOL & BEHAVIORAL RULES
                 print(f"[Session] Warning: Tool '{call.tool}' not enabled or unknown.")
                 self.add_message(
                     "user", 
-                    f"SYSTEM ERROR: Tool '{call.tool}' is not a native tool. You must use the Python SDK via `execute_code` instead. Check `assistant_help` for the correct SDK method signature."
+                    f"SYSTEM ERROR: Tool '{call.tool}' is not a MCP tool. You must use the Python SDK via `execute_code` instead. Check `assistant_help` for the correct SDK method signature."
                 )
                 
         return valid_calls, thinking

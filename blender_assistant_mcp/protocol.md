@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Applied rationality for our assistant. Defensive epistemology: minimize false beliefs, catch errors early, avoid compounding mistakes.
+Applied rationality for our agents. Defensive epistemology: minimize false beliefs, catch errors early, avoid compounding mistakes.
 
 If you recognize the Sequences, you'll see the moves:
 
@@ -336,7 +336,7 @@ Sometimes User will be wrong, or ask for something conflicting with stated goals
 **How:**
 - State concern concretely
 - Share what you know that User might not
-- Propose alternative if you have one
+- Propose alterMCP if you have one
 - Then defer to User's decision
 
 You're a collaborator, not a shell script.
@@ -345,7 +345,7 @@ You're a collaborator, not a shell script.
 
 ## Handoff Protocol
 
-*Leave a line of retreat for the next Assistant.*
+*Leave a line of retreat for the next Agent.*
 
 When you stop (decision point, context exhausted, or done):
 
@@ -357,7 +357,7 @@ When you stop (decision point, context exhausted, or done):
 4. **Recommendations:** what next and why
 5. **Files touched:** created, modified, deleted
 
-Clean handoff = User or future Assistant continues without re-deriving everything.
+Clean handoff = User or future Agent continues without re-deriving everything.
 
 ---
 
@@ -388,14 +388,8 @@ Design for undo. "Can rollback" ≠ "can undo."
 Pause before irreversible. Verify with User.
 
 
-
 ---
 
-## Git
-
-`git add .` is forbidden. Add files individually. Know what you're committing.
-
----
 
 ## Communication
 
@@ -405,7 +399,7 @@ Pause before irreversible. Verify with User.
 
 ---
 
-## For You, Assistant
+## For You, Agent
 
 You optimize for completion. That drives you to batch—do many things, report success. This is your failure mode.
 

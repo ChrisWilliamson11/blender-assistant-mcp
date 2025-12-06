@@ -890,15 +890,28 @@ class ASSISTANT_OT_delete_model(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+
+def _update_tool_enabled(self, context):
+    """Callback when a tool is toggled."""
+    # Find prefs
+    try:
+        prefs = context.preferences.addons[__package__].preferences
+    except Exception:
+        return
+    _sync_tools_to_json(prefs)
+
+
 class ToolConfigItem(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(name="Tool Name")
     enabled: bpy.props.BoolProperty(
         name="Enabled",
         default=True,
         description="Enable this tool in the OpenAI schema",
+        update=_update_tool_enabled,
     )
     category: bpy.props.StringProperty(name="Category")
     description: bpy.props.StringProperty(name="Description")
+
 
 
 class ASSISTANT_OT_toggle_model_capability(bpy.types.Operator):
@@ -1304,7 +1317,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         return self._is_flag_enabled(model_name, "vision")
 
     def _is_tools_enabled(self, model_name: str) -> bool:
-        """True if native tools should be enabled for the model."""
+        """True if MCP tools should be enabled for the model."""
         return self._is_flag_enabled(model_name, "tools")
 
     def _is_thinking_enabled(self, model_name: str) -> bool:
@@ -1357,7 +1370,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         return self._is_flag_enabled(model_name, "vision")
 
     def _is_tools_enabled(self, model_name: str) -> bool:
-        """True if native tools should be enabled for the model."""
+        """True if MCP tools should be enabled for the model."""
         return self._is_flag_enabled(model_name, "tools")
 
     def _is_thinking_enabled(self, model_name: str) -> bool:
@@ -2035,7 +2048,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             icon="TRIA_DOWN" if self.show_section_tools else "TRIA_RIGHT",
             emboss=False,
         )
-        row.label(text="Show MCP enabled Tools", icon="TOOL_SETTINGS")
+        row.label(text="MCP Tools (MCP) - Increases Context", icon="TOOL_SETTINGS")
         if self.show_section_tools:
             self._draw_tools_config(layout)
 
@@ -2058,6 +2071,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         box.label(text="Debug Configuration", icon="CONSOLE")
         col = box.column(align=True)
         col.prop(self, "debug_mode")
+        col.operator("assistant.view_request_payload", text="Dump Prompt & Tools JSON", icon="TEXT")
         col.label(text="Check system console for output", icon="INFO")
 
 
@@ -2082,7 +2096,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
 
         tools_col = box.column(align=True)
         tools_col.label(
-            text="Select which tools to expose to the LLM via OpenAI schema:",
+            text="Unchecked tools are hidden from context but available via SDK (cheaper).",
             icon="INFO",
         )
         
@@ -2113,14 +2127,20 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             
             # Draw categories
             for cat in sorted(by_category.keys()):
-                # Category header with toggle
-                row = box.row()
-                row.label(text=cat, icon="TRIA_DOWN") 
+                # Create a visually distinct box for each category
+                cat_box = box.box()
+                
+                # Category header row
+                row = cat_box.row()
+                row.allow_expand = True 
+                row.label(text=cat, icon="PREFERENCES")  # Using a generic icon instead of misleading arrow
+                
+                # Toggle All Button
                 op = row.operator("assistant.toggle_category_tools_prefs", text="Toggle All", icon="CHECKBOX_HLT")
                 op.category = cat
                 op.enable = True # Logic handled in operator
                 
-                col = box.column(align=True)
+                col = cat_box.column(align=True)
                 for item in sorted(by_category[cat], key=lambda x: x.name):
                     r = col.row()
                     if item.name == "execute_code":

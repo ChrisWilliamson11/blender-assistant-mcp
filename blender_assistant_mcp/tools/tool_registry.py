@@ -467,8 +467,8 @@ def get_tools_schema(enabled_tools: List[str] = None) -> str:
             lines.append(f"- {name}({args_str}): {desc}")
         else:
             lines.append(f"- {name}(): {desc}")
-    header = "NATIVE TOOLS (Call directly):\n"
-    return header + "\n".join(lines) if lines else "NATIVE TOOLS (Call directly):\n(none)"
+    header = "MCP TOOLS (Call directly):\n"
+    return header + "\n".join(lines) if lines else "MCP TOOLS (Call directly):\n(none)"
 
 
 def clear_tools():

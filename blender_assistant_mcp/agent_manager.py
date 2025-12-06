@@ -54,23 +54,12 @@ class AgentTools:
                 description="General Purpose Worker Agent. Can execute code, use Blender, search Web, download assets, etc.",
                 system_prompt="""You are the Task Agent. Your job is to EXECUTE the task given by the Manager.
                 
-                CAPABILITIES (You have full access):
-                - Python Scripting (`execute_code`) & Blender API
-                - Web Search & Scrape
-                - PolyHaven & Sketchfab Asset Download
-                - Vision (Viewport Capture)
-                
                 PROCESS:
                 1. ANALYZE: Understand the specific task.
                 2. PLAN: If complex, break down into steps.
                 3. EXECUTE: Use tools to achieve the goal.
                 4. VERIFY: Check if your actions worked.
-                5. REPORT: Return `expected_changes` JSON summary when done.
-                
-                CRITICAL RULES:
-                - If a tool fails (e.g., arguments mismatch), YOU MUST use `assistant_help` to check the tool signature immediately. DO NOT GUESS AGAIN.
-                - For PolyHaven/Sketchfab: Use `get_polyhaven_asset_info` (or equivalent) to check availability (resolutions/formats) BEFORE downloading.
-                - If stuck, think step-by-step why it failed."""
+                5. REPORT: Return `expected_changes` JSON summary when done (matching Scene_Updates format)."""
             ),
             "COMPLETION_AGENT": Agent(
                 name="COMPLETION_AGENT",
@@ -88,7 +77,7 @@ class AgentTools:
                 
                 CRITICAL RULES:
                 - Output VALID JSON only.
-                - Verify efficiently using `get_scene_info` or `execute_code` (for complex checks).
+                - Verify efficiently using `get_scene_info`, `get_object_info`, or `execute_code` (for complex checks).
                 - If a tool fails, check usage with `assistant_help`."""
             )
         }
@@ -276,7 +265,7 @@ class AgentTools:
                     self.execute_in_main_thread(self.message_callback, "system", f"Agent Error: {e}")
                 return 
 
-    def consult_specialist(self, role: str, query: str, focus_object: str = None) -> str:
+    def consult_specialist(self, role: str, query: str, focus_object: str = None, dry_run: bool = False):
         """delegate a task to a Worker Agent (Starts Background Thread)."""
         role = role.upper()
         if role not in self.agents:
@@ -323,25 +312,26 @@ class AgentTools:
             # 4. Generate Tool Schemas
             tool_schemas = self.tool_manager.get_openai_tools(injected_tools)
 
-            # Inject 'finish_task'
-            tool_schemas.append({
-                "type": "function",
-                "function": {
-                    "name": "finish_task",
-                    "description": "Call this tool when you have completed your objective.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "summary": {"type": "string"},
-                            "expected_changes": {
-                                "type": "array", 
-                                "items": {"type": "string"}
-                            }
-                        },
-                        "required": ["expected_changes"]
+            # Inject 'finish_task' (but NOT for Completion Agent)
+            if role != "COMPLETION_AGENT":
+                tool_schemas.append({
+                    "type": "function",
+                    "function": {
+                        "name": "finish_task",
+                        "description": "Call this tool when you have completed your objective.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "summary": {"type": "string"},
+                                "expected_changes": {
+                                    "type": "array", 
+                                    "items": {"type": "string"}
+                                }
+                            },
+                            "required": ["expected_changes"]
+                        }
                     }
-                }
-            })
+                })
             
             # 5. Generate SDK Hints (For Allowed but Disabled Tools)
             sdk_hints = self.tool_manager.get_system_prompt_hints(
@@ -361,15 +351,21 @@ class AgentTools:
             f"{context_prompt}\n"
             f"{initial_context}\n\n"
             f"{behavior_prompt}\n\n"
-            f"AVAILABLE TOOLS (Native):\n{tools_text}\n\n"
+            f"MCP TOOLS:\n{tools_text}\n\n"
             f"{sdk_hints}\n\n"
             "Your goal is to solve the user's query efficiently. "
             "Use your tools."
         )
 
-        # Debug: Print system prompt if enabled
         if prefs and getattr(prefs, "debug_mode", False):
             print(f"\n[AgentTools] [AGENT: {agent.name}] System Prompt:\n{'-'*40}\n{system_prompt}\n{'-'*40}\n")
+        
+        if dry_run:
+            return {
+                "system_prompt": system_prompt,
+                "tool_schemas": tool_schemas,
+                "enabled_tools": list(injected_tools)
+            }
         
         messages = [
             {"role": "system", "content": system_prompt},

@@ -2,7 +2,7 @@
 Tool Manager for Blender Assistant.
 
 This module centralizes tool definitions, schema generation, and context management.
-It helps manage the trade-off between exposing tools natively (MCP) vs via SDK hints
+It helps manage the trade-off between exposing tools MCPly (MCP) vs via SDK hints
 to control context window usage.
 """
 
@@ -17,19 +17,8 @@ class ToolManager:
         # Core tools - empty to allow full user control via preferences
         self.core_tools: Set[str] = set()
         
-        # Default tools enabled if no preferences are found (first run)
-        self.default_tools: Set[str] = {
-            "get_object_info",
-            "get_scene_info",
-            "inspect_data",
-            "search_data",
-            "task_add",
-            "task_clear",
-            "task_complete",
-            "task_list",
-            "task_update",
-            "capture_viewport_for_vision",
-        }
+        # Default tools - Removed per user request to enforce explicit configuration.
+        self.default_tools: Set[str] = set()
 
     def get_enabled_tools(self, preferences=None) -> Set[str]:
         """Get the set of enabled tools based on preferences."""
@@ -43,32 +32,24 @@ class ToolManager:
 
             # If preferences has a tool config, use it
             tool_config_items = getattr(preferences, "tool_config_items", None)
-            if tool_config_items and len(tool_config_items) > 0:
+            if tool_config_items:
                 for t in tool_config_items:
                     if t.enabled:
-                        # Respect feature flags for specific tools
-                        if t.name == "rag_query" and not rag_enabled:
+                        # Respect global feature flags by Category
+                        # This avoids hardcoding tool names
+                        if t.category == "RAG" and not rag_enabled:
                             continue
-                        if t.name == "search_memory" and not memory_enabled:
+                        if t.category == "Memory" and not memory_enabled:
                             continue
-                        if t.name == "capture_viewport_for_vision" and not vision_enabled:
+                        if t.category == "Vision" and not vision_enabled:
                             continue
+                        
                         enabled.add(t.name)
                 return enabled
             
-            # If no tool config (first run?), use defaults but respect feature flags
-            for tool_name in self.default_tools:
-                if tool_name == "rag_query" and not rag_enabled:
-                    continue
-                if tool_name == "search_memory" and not memory_enabled:
-                    continue
-                if tool_name == "capture_viewport_for_vision" and not vision_enabled:
-                    continue
-                enabled.add(tool_name)
-            return enabled
-
-        # Fallback to default set
-        return self.default_tools
+        # If no tool config or preferences could not be read, return empty set (Pure SDK)
+        # We do NOT fallback to defaults anymore.
+        return set()
 
     def get_openai_tools(self, enabled_tools: Set[str]) ->List[Dict[str, Any]]:
         """Generate OpenAI-style tool definitions for enabled tools."""
@@ -89,7 +70,7 @@ class ToolManager:
         return tools
 
     def get_system_prompt_hints(self, enabled_tools: Set[str], allowed_tools: Set[str] = None) -> str:
-        """Generate SDK hints for tools that are NOT enabled natively.
+        """Generate SDK hints for tools that are NOT enabled MCPly.
         
         Args:
             enabled_tools: Tools that are enabled as MCP (schemas injected).
@@ -103,7 +84,7 @@ class ToolManager:
         for tool in all_tools:
             name = tool.get("name")
             
-            # Skip if enabled as MCP (native)
+            # Skip if enabled as MCP (MCP)
             if name in enabled_tools:
                 continue
                 
@@ -204,7 +185,7 @@ class ToolManager:
         return """BEHAVIOR
 - **PLAN FIRST**: If a request is complex, briefly plan before executing.
 - **ACCESS METHODS**: You have two ways to act:
-  1. **Native Tools**: Call these directly (e.g., `get_scene_info`).
+  1. **MCP Tools**: Call these using your built-in tool calling mechanism, using the format specified (e.g., `get_scene_info`).
   2. **Python Code**: Use `execute_code` to run scripts. Use this for `assistant_sdk.*` methods and raw `bpy` commands.
 - **FINDING TOOLS**: Do not guess tool names. Use `assistant_help` to find SDK methods, `rag_query` for docs, or `search_memory` for past solutions.
 - **SCENE AWARENESS**: 'SCENE UPDATES' provide a SUMMARY of changes (added/modified objects). Use `inspect_data` or `get_scene_info(detailed=True)` to fetch detailed properties (like vertices, modifiers, or custom props) if needed.

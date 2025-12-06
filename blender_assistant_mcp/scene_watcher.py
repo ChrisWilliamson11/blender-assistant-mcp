@@ -18,7 +18,7 @@ class SceneWatcher:
             return
 
         # Capture objects (names)
-        # We use names as unique IDs for simplicity, though UUIDs would be better if Blender had them natively exposed easily
+        # We use names as unique IDs for simplicity, though UUIDs would be better if Blender had them MCPly exposed easily
         self.last_objects = {obj.name for obj in bpy.data.objects}
         self.last_materials = {mat.name for mat in bpy.data.materials}
         

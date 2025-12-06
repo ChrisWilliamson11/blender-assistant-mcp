@@ -46,13 +46,7 @@ def get_session(context) -> AssistantSession:
         
     return _sessions[session_id]
 
-def get_schema_tools() -> list[str]:
-    """Get list of enabled tool names for debug UI."""
-    # Create a temporary tool manager to check enabled tools
-    tm = ToolManager()
-    # Note: We are not passing prefs here, so this returns default tools.
-    # Ideally we should pass context/prefs if possible, but for debug log this is okay.
-    return list(tm.get_enabled_tools())
+
 
 def reset_session(session_id: str):
     """Reset a specific session (e.g. on new chat or delete)."""
@@ -229,14 +223,27 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         model_name = getattr(prefs, "model_file", "qwen2.5-coder:7b")
         debug_mode = getattr(prefs, "debug_mode", False)
         
+        
+        
+        # Get fresh enabled tools from preferences
+        enabled_tools = session.tool_manager.get_enabled_tools_for_role(
+            "MANAGER", preferences=prefs
+        )
+        
+        if debug_mode:
+             print(f"[Debug] Session Enabled Tools: {enabled_tools}")
+        
+        # Build system prompt with current tools
+        system_prompt = session.get_system_prompt(enabled_tools)
+        
         # Prepare tools for OpenAI format
-        tools = session.tool_manager.get_openai_tools(session.enabled_tools)
+        tools = session.tool_manager.get_openai_tools(enabled_tools)
         
         keep_alive = getattr(prefs, "keep_alive", "5m")
         
         self._thread = threading.Thread(
             target=self._http_worker,
-            args=(model_name, session.history, session.get_system_prompt(), tools, debug_mode, keep_alive),
+            args=(model_name, session.history, system_prompt, tools, debug_mode, keep_alive),
             daemon=True
         )
         self._thread.start()
@@ -310,7 +317,13 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                     
                     if self._response:
                         # Process response
-                        tool_calls, thinking = session.process_response(self._response)
+                        try:
+                            prefs = context.preferences.addons[__package__].preferences
+                            enabled_tools = session.tool_manager.get_enabled_tools_for_role("MANAGER", preferences=prefs)
+                        except:
+                            enabled_tools = set()
+
+                        tool_calls, thinking = session.process_response(self._response, enabled_tools)
                         
                         if thinking:
                             self._add_message("Thinking", thinking)
@@ -357,19 +370,18 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                                             user_request = msg.get("content", "Unknown request")
                                             break
                                     
-                                    comp_call = ToolCall(
-                                        tool="consult_specialist",
-                                        args={
-                                            "role": "COMPLETION",
-                                            "query": f"The assistant stopped without action. The user's original request was: '{user_request}'. Check if this request is fully satisfied."
-                                        }
-                                    )
                                     session.tool_queue = [comp_call]
                                     session.state = "EXECUTING"
                                     # Return to let timer pick up EXECUTING state
                                     return {"PASS_THROUGH"}
                                 else:
-                                    self._add_message("System", "Task Completed.")
+                                    # Empty response (No tools, no content, no thinking).
+                                    # This usually means the model stopped prematurely or messed up JSON.
+                                    # We should KICK it to continue.
+                                    self._add_message("System", "Empty response detected. Auto-continuing...")
+                                    session.add_message("user", "System: You returned an empty response. Please continue your work or call `finish_task` if done.")
+                                    self._start_step(context, session)
+                                    return {"PASS_THROUGH"}
                             return self._finish(context)
                     else:
                         self._add_message("Error", "No response from model")
@@ -417,14 +429,94 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         return {"FINISHED"}
 
 
+
+class ASSISTANT_OT_view_request_payload(bpy.types.Operator):
+    """View the exact system prompt and tools sent to the LLM"""
+    bl_idname = "assistant.view_request_payload"
+    bl_label = "View Request Payload"
+    
+    def execute(self, context):
+        session = get_session(context)
+        if not session:
+            self.report({"ERROR"}, "No active session")
+            return {"CANCELLED"}
+            
+        import json
+        
+        # reconstruct payload - Use ToolManager with fresh prefs
+        try:
+             prefs = context.preferences.addons[__package__].preferences
+        except:
+             prefs = None
+
+        enabled_tools = session.tool_manager.get_enabled_tools_for_role("MANAGER", preferences=prefs)
+        system_prompt = session.get_system_prompt(enabled_tools)
+        tools = session.tool_manager.get_openai_tools(enabled_tools)
+        
+        # Capture Sub-Agent Prompts (Dry Run)
+        try:
+             task_data = session.agent_tools.consult_specialist("TASK_AGENT", "DEBUG_QUERY", dry_run=True)
+             completion_data = session.agent_tools.consult_specialist("COMPLETION_AGENT", "DEBUG_QUERY", dry_run=True)
+        except Exception as e:
+             task_data = f"Error: {e}"
+             completion_data = f"Error: {e}"
+        
+        # Build Readable Report
+        lines = []
+        lines.append("="*60)
+        lines.append(" ASSISTANT DEBUG REPORT")
+        lines.append("="*60)
+        lines.append("")
+        
+        # MANAGER
+        lines.append(">>> MANAGER AGENT <<<")
+        lines.append("-" * 30)
+        lines.append("SYSTEM PROMPT:")
+        lines.append(system_prompt)
+        lines.append("")
+        lines.append("TOOLS (Native):")
+        lines.append(json.dumps(tools, indent=2))
+        lines.append("\n" + "="*60 + "\n")
+        
+        # SUB-AGENTS
+        for role, data in [("TASK_AGENT", task_data), ("COMPLETION_AGENT", completion_data)]:
+             lines.append(f">>> {role} <<<")
+             lines.append("-" * 30)
+             if isinstance(data, dict):
+                 lines.append("SYSTEM PROMPT:")
+                 lines.append(str(data.get("system_prompt", "")))
+                 lines.append("")
+                 lines.append("TOOLS (Native):")
+                 lines.append(json.dumps(data.get("tool_schemas", []), indent=2))
+             else:
+                 lines.append(f"ERROR/RAW: {data}")
+             lines.append("\n" + "="*60 + "\n")
+
+        report = "\n".join(lines)
+        
+        text_name = "Debug_Assistant_Payload.txt"
+        text_block = bpy.data.texts.get(text_name)
+        if not text_block:
+            text_block = bpy.data.texts.new(text_name)
+            
+        text_block.clear()
+        text_block.write(report)
+        
+        # Switch area to Text Editor if possible, or just report
+        self.report({"INFO"}, f"Payload dumped to '{text_name}'")
+        return {"FINISHED"}
+
+
 def register():
     bpy.utils.register_class(ASSISTANT_OT_stop)
     bpy.utils.register_class(ASSISTANT_OT_continue_chat)
     bpy.utils.register_class(ASSISTANT_OT_submit_message)
     bpy.utils.register_class(ASSISTANT_OT_send)
+    bpy.utils.register_class(ASSISTANT_OT_view_request_payload)
 
 def unregister():
     bpy.utils.unregister_class(ASSISTANT_OT_stop)
     bpy.utils.unregister_class(ASSISTANT_OT_continue_chat)
     bpy.utils.unregister_class(ASSISTANT_OT_submit_message)
     bpy.utils.unregister_class(ASSISTANT_OT_send)
+    bpy.utils.unregister_class(ASSISTANT_OT_view_request_payload)

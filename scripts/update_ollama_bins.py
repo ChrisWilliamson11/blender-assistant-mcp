@@ -98,26 +98,29 @@ def copy_binaries(
         for p in lib_dir.glob("*.dll"):
             filenames.append(p)
 
-        # CUDA runtime selection
-        cuda_dir_13 = lib_dir / "cuda_v13"
-        cuda_dir_12 = lib_dir / "cuda_v12"
+        # CUDA runtime folders
+        cuda_dirs = {
+            "11": lib_dir / "cuda_v11",
+            "12": lib_dir / "cuda_v12",
+            "13": lib_dir / "cuda_v13",
+        }
 
-        selected_cuda_dir: Path | None = None
-        if cuda_choice == "13":
-            selected_cuda_dir = cuda_dir_13 if cuda_dir_13.exists() else None
-        elif cuda_choice == "12":
-            selected_cuda_dir = cuda_dir_12 if cuda_dir_12.exists() else None
-        else:
-            # auto: prefer v13 when present, otherwise v12
-            if cuda_dir_13.exists():
-                selected_cuda_dir = cuda_dir_13
-            elif cuda_dir_12.exists():
-                selected_cuda_dir = cuda_dir_12
-
-        if selected_cuda_dir and selected_cuda_dir.exists():
-            print(f"[update] Using CUDA DLLs from {selected_cuda_dir}")
-            for p in selected_cuda_dir.glob("*.dll"):
-                filenames.append(p)
+        # Select which folders to copy from
+        targets = []
+        if cuda_choice == "all":
+            targets = ["11", "12", "13"]
+        elif cuda_choice == "auto":
+            # Auto: Include 11 and 12 for broad compatibility, and 13 if present
+            targets = ["11", "12", "13"]
+        elif cuda_choice in cuda_dirs:
+            targets = [cuda_choice]
+            
+        for key in targets:
+            cdir = cuda_dirs.get(key)
+            if cdir and cdir.exists():
+                 print(f"[update] Including CUDA {key} DLLs from {cdir}")
+                 for p in cdir.glob("*.dll"):
+                     filenames.append(p)
 
     if not filenames:
         raise RuntimeError(f"No binaries found in {src_dir}")
@@ -200,9 +203,9 @@ def main(argv: list[str]) -> int:
 
     parser.add_argument(
         "--cuda",
-        choices=["auto", "12", "13"],
+        choices=["auto", "11", "12", "13", "all"],
         default="auto",
-        help="Select CUDA runtime DLLs to copy from lib/ollama (auto prefers v13 when available)",
+        help="Select CUDA runtime DLLs to copy (auto/all copies 11, 12, 13 if found)",
     )
     args = parser.parse_args(argv)
 

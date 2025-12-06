@@ -8,7 +8,7 @@ sys.modules["bpy"] = MagicMock()
 from blender_assistant_mcp.core import ResponseParser, ToolCall
 
 class TestResponseParser(unittest.TestCase):
-    def test_native_tool_call(self):
+    def test_MCP_tool_call(self):
         response = {
             "message": {
                 "role": "assistant",

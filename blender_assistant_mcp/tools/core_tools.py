@@ -134,16 +134,16 @@ def register():
     register_tool(
         name="assistant_help",
         func=assistant_help,
-        description="Get detailed help/schema for any tool or SDK method.",
+        description="Get help/schema for tools. Call without arguments to discover available Categories. Call with 'CategoryName' to list tools in a category. Call with 'tool_name' for detailed schema.",
         input_schema={
             "type": "object",
             "properties": {
                 "tool_name": {
                     "type": "string",
-                    "description": "The name of the tool to lookup (e.g. 'get_scene_info' or 'assistant_sdk.blender.get_scene_info')"
+                    "description": "Tool name, Category name, or empty to list all categories."
                 }
             },
-            "required": ["tool_name"]
+            "required": []
         },
         category="Core"
     )

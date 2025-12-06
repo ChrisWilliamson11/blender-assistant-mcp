@@ -337,12 +337,13 @@ def update_init_py_version(path: Path, new_version: str, dry_run: bool) -> None:
 # -------------------------------
 
 
-def build_zip(new_version: str, ext_id: str, dry_run: bool) -> Path:
+def build_zip(new_version: str, ext_id: str, dry_run: bool, exclude_bin: bool = False) -> Path:
     """
-    Invoke build_extension.py to produce <ext_id>-<new_version>.zip at repo root.
+    Invoke build_extension.py to produce <ext_id>-<new_version>[-lite].zip at repo root.
     Returns expected zip path.
     """
-    zip_path = REPO_ROOT / f"{ext_id}-{new_version}.zip"
+    suffix = "-lite" if exclude_bin else ""
+    zip_path = REPO_ROOT / f"{ext_id}-{new_version}{suffix}.zip"
 
     if dry_run:
         print(f"[dry-run] Would build: {zip_path.name}")
@@ -362,10 +363,16 @@ def build_zip(new_version: str, ext_id: str, dry_run: bool) -> Path:
 
     # Call its main() entrypoint if present, otherwise fall back to build_extension.build_extension()
     if hasattr(build_extension, "main"):
-        rc = build_extension.main([])
+        args = []
+        if exclude_bin:
+            args.append("--exclude-bin")
+            
+        rc = build_extension.main(args)
         if rc != 0:
             raise RuntimeError(f"build_extension.py failed with exit code {rc}")
     elif hasattr(build_extension, "build_extension"):
+        # Note: build_extension() func likely doesn't support exclude_bin without args plumbing
+        # We assume main() exists as per current codebase.
         build_extension.build_extension()
     else:
         raise RuntimeError("build_extension.py has no callable entrypoint")
@@ -426,7 +433,7 @@ def git_push_with_tags(dry_run: bool) -> None:
 
 def gh_release_create(
     tag: str,
-    asset: Path,
+    assets: list[Path],
     title: str,
     notes: Optional[str],
     prerelease: bool,
@@ -438,7 +445,10 @@ def gh_release_create(
             "GitHub CLI 'gh' not found on PATH. Install from https://cli.github.com/ and run 'gh auth login'."
         )
 
-    cmd = ["gh", "release", "create", tag, str(asset)]
+    cmd = ["gh", "release", "create", tag]
+    for asset in assets:
+        cmd.append(str(asset))
+        
     cmd += ["-t", title]
     if notes:
         cmd += ["-n", notes]
@@ -453,7 +463,7 @@ def gh_release_create(
 
 def gh_release_upload(
     tag: str,
-    asset: Path,
+    assets: list[Path],
     repo: Optional[str],
     clobber: bool,
     dry_run: bool,
@@ -462,7 +472,10 @@ def gh_release_upload(
         raise RuntimeError(
             "GitHub CLI 'gh' not found on PATH. Install from https://cli.github.com/ and run 'gh auth login'."
         )
-    cmd = ["gh", "release", "upload", tag, str(asset)]
+    cmd = ["gh", "release", "upload", tag]
+    for asset in assets:
+        cmd.append(str(asset))
+        
     if clobber:
         cmd += ["--clobber"]
     if repo:
@@ -572,23 +585,40 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print(f"Target version:  {target_version} (update-existing)")
 
         # Build zip unless --no-build is set
+        # Build zip unless --no-build is set
+        assets = []
         if args.no_build:
-            zip_path = REPO_ROOT / f"{ext_id}-{target_version}.zip"
+            # Assume both exist? Or just try to find them
+            zip_full = REPO_ROOT / f"{ext_id}-{target_version}.zip"
+            zip_lite = REPO_ROOT / f"{ext_id}-{target_version}-lite.zip"
+            if zip_full.exists(): assets.append(zip_full)
+            if zip_lite.exists(): assets.append(zip_lite)
+            if not assets:
+                info(f"Warning: No zip artifacts found matching version {target_version}")
         else:
-            info("Building extension zip")
+            info("Building extension zip (Full)")
             try:
-                zip_path = build_zip(target_version, ext_id, args.dry_run)
+                zip_full = build_zip(target_version, ext_id, args.dry_run, exclude_bin=False)
+                assets.append(zip_full)
             except Exception as e:
-                error(f"Build failed: {e}")
+                error(f"Full build failed: {e}")
+                return 1
+                
+            info("Building extension zip (Lite)")
+            try:
+                zip_lite = build_zip(target_version, ext_id, args.dry_run, exclude_bin=True)
+                assets.append(zip_lite)
+            except Exception as e:
+                error(f"Lite build failed: {e}")
                 return 1
 
         # Upload to existing GitHub release; skip commit/tag/push
         tag = f"v{target_version}"
-        info("Uploading asset to existing GitHub release via gh")
+        info(f"Uploading {len(assets)} assets to existing GitHub release via gh")
         try:
             gh_release_upload(
                 tag=tag,
-                asset=zip_path,
+                assets=assets,
                 repo=args.repo,
                 clobber=True,
                 dry_run=args.dry_run,
@@ -599,7 +629,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
         print("\n✓ Release asset updated")
         print(f"  Tag:    {tag}")
-        print(f"  Asset:  {zip_path.relative_to(REPO_ROOT)}")
+        for a in assets:
+            print(f"  Asset:  {a.relative_to(REPO_ROOT)}")
         print(f"  Repo:   {args.repo or '(inferred by gh)'}")
         return 0
 
@@ -623,15 +654,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
 
     # Build zip
+    # Build zip
+    assets = []
     if args.no_build:
         info("Skipping build (--no-build set)")
-        zip_path = REPO_ROOT / f"{ext_id}-{target_version}.zip"
+        # Try to infer assets just for reporting? Not critical since we skip build.
     else:
-        info("Building extension zip")
+        info("Building extension zip (Full)")
         try:
-            zip_path = build_zip(target_version, ext_id, args.dry_run)
+            zip_full = build_zip(target_version, ext_id, args.dry_run, exclude_bin=False)
+            assets.append(zip_full)
         except Exception as e:
-            error(f"Build failed: {e}")
+            error(f"Full build failed: {e}")
+            return 1
+            
+        info("Building extension zip (Lite)")
+        try:
+            zip_lite = build_zip(target_version, ext_id, args.dry_run, exclude_bin=True)
+            assets.append(zip_lite)
+        except Exception as e:
+            error(f"Lite build failed: {e}")
             return 1
 
     # Tag and push
@@ -667,7 +709,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             info("Creating GitHub release via gh")
             gh_release_create(
                 tag=tag,
-                asset=zip_path,
+                assets=assets,
                 title=target_version,
                 notes=args.notes,
                 prerelease=args.prerelease,
@@ -682,7 +724,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     print("\n✓ Release complete")
     print(f"  Tag:    {tag}")
-    print(f"  Asset:  {zip_path.relative_to(REPO_ROOT)}")
+    print("\n✓ Release complete")
+    print(f"  Tag:    {tag}")
+    for a in assets:
+        print(f"  Asset:  {a.relative_to(REPO_ROOT)}")
     print(f"  Repo:   {args.repo or '(inferred by gh)'}")
     return 0
 
