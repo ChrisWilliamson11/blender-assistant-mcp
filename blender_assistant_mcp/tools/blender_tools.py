@@ -728,27 +728,26 @@ def _get_code_namespace():
             _as_mod = _create_shim_module("assistant_sdk", sdk_obj)
             sys.modules["assistant_sdk"] = _as_mod
 
-            # 2. Create submodules for each tool category (blender, polyhaven, etc.)
-            for category in [
-                "blender",
-                "polyhaven",
-                "sketchfab",
-                "stock_photos",
-                "web",
-                "rag",
-                "research",
-                "memory",
-            ]:
-                if hasattr(sdk_obj, category):
-                    cat_obj = getattr(sdk_obj, category)
-                    cat_mod_name = f"assistant_sdk.{category}"
+            # 2. Create submodules for each tool category dynamically
+            for category in dir(sdk_obj):
+                if category.startswith("_") or category == "help":
+                    continue
+                    
+                cat_obj = getattr(sdk_obj, category)
+                
+                # Only process if it looks like a namespace object (has _tools or similar)
+                # or just try to wrap it if it's not a basic type
+                if isinstance(cat_obj, (int, float, str, bool, list, dict, tuple)):
+                    continue
 
-                    # Create the submodule
-                    cat_mod = _create_shim_module(cat_mod_name, cat_obj)
-                    sys.modules[cat_mod_name] = cat_mod
+                cat_mod_name = f"assistant_sdk.{category}"
 
-                    # Link it to the parent
-                    setattr(_as_mod, category, cat_mod)
+                # Create the submodule
+                cat_mod = _create_shim_module(cat_mod_name, cat_obj)
+                sys.modules[cat_mod_name] = cat_mod
+
+                # Link it to the parent
+                setattr(_as_mod, category, cat_mod)
 
             # Bind module into namespace so 'import assistant_sdk' works inside exec()
             _CODE_NAMESPACE["assistant_sdk"] = _as_mod
@@ -819,6 +818,15 @@ def execute_code(code: str) -> dict:
     """
 
     try:
+        import io
+        import sys
+        import traceback
+        
+        # Sanitize code input: Convert literal \n to actual newlines if detected
+        # LLMs often send "line1\nline2" as a single line string with literal backslashes
+        if "\\n" in code and "\n" not in code:
+             code = code.replace("\\n", "\n")
+             
         import io
         import sys
         import traceback
@@ -1692,121 +1700,10 @@ def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
         if not queries:
             return {"error": "Missing 'tool' or 'tools' parameter"}
 
-        # Define the knowledge base of SDK tools
+        # Define the knowledge base of SDK tools (Manual Overrides & Virtual Tools)
         # Format: alias -> {sdkUsage, notes, returns?}
         sdk_docs = {
-            # PolyHaven
-            "polyhaven.search": {
-                "sdkUsage": "assistant_sdk.polyhaven.search(asset_type='hdri'|'texture'|'model', query='', limit=10)",
-                "notes": "Returns dict with 'assets' list. Iterate results['assets'] to find items.",
-                "returns": "{'success': bool?, 'assets': [ { 'id': str, 'name': str, ... } ], 'count': int}",
-            },
-            "polyhaven.download": {
-                "sdkUsage": "assistant_sdk.polyhaven.download(asset=asset_dict, asset_type='type', resolution='2k')",
-                "notes": "Downloads and imports asset. Pass the full asset dict from search, or asset_id.",
-                "returns": "{'success': bool, 'path': str?, 'message': str?}",
-            },
-            # Blender - Scene
-            "blender.get_scene_info": {
-                "sdkUsage": "assistant_sdk.blender.get_scene_info(expand_depth=2)",
-                "notes": "Returns JSON tree of scene objects/collections.",
-                "returns": "{'outliner': {'lines': [...], 'nodes': [...]}, 'fold_state': {...}, 'summary': str}",
-            },
-            "blender.get_object_info": {
-                "sdkUsage": "assistant_sdk.blender.get_object_info(object_names=['Name'])",
-                "notes": "Get detailed info for specific objects.",
-            },
-            "blender.list_collections": {
-                "sdkUsage": "assistant_sdk.blender.list_collections()",
-                "notes": "List all collection names.",
-            },
-            "blender.get_collection_info": {
-                "sdkUsage": "assistant_sdk.blender.get_collection_info(collection_names=['Name'])",
-                "notes": "Get info about specific collections.",
-            },
-            # Blender - Manipulation
-            "blender.create_collection": {
-                "sdkUsage": "assistant_sdk.blender.create_collection(name='Name', parent='Parent')",
-                "notes": "Create a new collection.",
-                "returns": "{'success': bool, 'name': str, 'parent': str|null}",
-            },
-            "blender.move_to_collection": {
-                "sdkUsage": "assistant_sdk.blender.move_to_collection(object_names=['Obj'], collection_name='Col')",
-                "notes": "Move objects to a collection.",
-                "returns": "{'success': bool, 'moved': ['Obj', ...]?}",
-            },
-            "blender.set_collection_color": {
-                "sdkUsage": "assistant_sdk.blender.set_collection_color(collection_name='Col', color_tag='COLOR_01')",
-                "notes": "Set collection color tag.",
-                "returns": "{'success': bool}",
-            },
-            "blender.delete_collection": {
-                "sdkUsage": "assistant_sdk.blender.delete_collection(collection_names=['Col'], delete_objects=False)",
-                "notes": "Delete collections.",
-                "returns": "{'success': bool, 'deleted': ['Col', ...]}",
-            },
-            # Blender - Selection/Active
-            "blender.get_selection": {
-                "sdkUsage": "assistant_sdk.blender.get_selection()",
-                "notes": "Get list of selected object names.",
-                "returns": "{'selected_objects': ['Name', ...], 'count': int, 'message': str}",
-            },
-            "blender.set_selection": {
-                "sdkUsage": "assistant_sdk.blender.set_selection(object_names=['Obj'], replace=True)",
-                "notes": "Set selected objects.",
-                "returns": "{'success': bool, 'selected': ['Obj', ...], 'not_found': ['Name', ...], 'message': str}",
-            },
-            "blender.get_active": {
-                "sdkUsage": "assistant_sdk.blender.get_active()",
-                "notes": "Get active object name.",
-                "returns": "{'active_object': 'Name'|None, 'type': str|None, 'message': str}",
-            },
-            "blender.set_active": {
-                "sdkUsage": "assistant_sdk.blender.set_active(object_name='Obj')",
-                "notes": "Set active object.",
-                "returns": "{'success': bool, 'active_object': 'Obj', 'message': str}",
-            },
-            "blender.select_by_type": {
-                "sdkUsage": "assistant_sdk.blender.select_by_type(type='MESH')",
-                "notes": "Select objects by type.",
-                "returns": "{'success': bool, 'selected': ['Name', ...], 'count': int, 'message': str}",
-            },
-            # Vision
-            "vision.capture": {
-                "sdkUsage": "assistant_sdk.vision.capture_viewport_for_vision()",
-                "notes": "SDK (execute_code): Capture 3D viewport as base64 image.",
-                "returns": "{'description': str, 'model': str, 'width': int, 'height': int}",
-            },
-            # Blender - Object/Material manipulation
-            "blender.create_object": {
-                "sdkUsage": "assistant_sdk.blender.create_object(type='PLANE'|'CUBE'|'SPHERE'|..., name='Name', location=[x,y,z], rotation=[x,y,z], scale=[x,y,z], text='...')",
-                "notes": "Create an object (mesh primitive, text, camera/light).",
-                "returns": "{'success': bool, 'name': str, 'type': str}",
-            },
-            "blender.modify_object": {
-                "sdkUsage": "assistant_sdk.blender.modify_object(name='Obj', location=[x,y,z], rotation=[x,y,z], scale=[x,y,z], visible=True|False, objects=[{...}])",
-                "notes": "Modify properties of one or more objects (supports batch via 'objects').",
-                "returns": "{'success': bool, 'modified': ['Name', ...]}",
-            },
-            "blender.delete_object": {
-                "sdkUsage": "assistant_sdk.blender.delete_object(name='Obj'|None, names=['ObjA','ObjB'])",
-                "notes": "Delete object(s) by name (supports batch via 'names').",
-                "returns": "{'success': bool, 'deleted': ['Name', ...]}",
-            },
-            "blender.set_material": {
-                "sdkUsage": "assistant_sdk.blender.set_material(object_name='Obj'|None, object_names=['ObjA','ObjB'], material_name='Mat'|None, color=[r,g,b(,a)])",
-                "notes": "Assign or create a material; sets Principled Base Color if 'color' specified.",
-            },
-            "blender.inspect_data": {
-                "sdkUsage": "assistant_sdk.blender.inspect_data(path='bpy.data.objects[\"Cube\"]', depth=1)",
-                "notes": "Introspect a Blender data block (AST-like view).",
-                "returns": "{'path': str, 'data': dict}",
-            },
-            "blender.search_data": {
-                "sdkUsage": "assistant_sdk.blender.search_data(root_path='bpy.data.objects', filter_props={'type':'MESH'})",
-                "notes": "Search for data blocks matching criteria (AST-grep like).",
-                "returns": "{'matches': [{'name': str, ...}], 'count': int}",
-            },
+            # Virtual / Workflow items (Not real tools)
             "web.images_workflow": {
                 "workflow": [
                     "# 3-STEP WORKFLOW for downloading web images:",
@@ -1816,119 +1713,103 @@ def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
                 ],
                 "notes": "Multi-step process: SEARCH for pages → EXTRACT image URLs → DOWNLOAD the image.",
             },
-            "web.extract_image_urls": {
-                "sdkUsage": "assistant_sdk.web.extract_image_urls(url='url')",
-                "notes": "SDK (execute_code): Find image URLs on a page.",
-                "returns": "{'success': bool, 'url': str, 'count': int, 'images': [str, ...]}",
-            },
-            "web.download_image": {
-                "sdkUsage": "assistant_sdk.web.download_image(image_url='url')",
-                "notes": "SDK (execute_code): Download image and load as Blender image/texture.",
-                "returns": "{'success': bool, 'image_name': str, 'packed': bool, 'size': 'WxH', 'applied_to': str|None, 'material': str?, 'message': str}",
-            },
-            # Sketchfab
-            "sketchfab.search": {
-                "sdkUsage": "assistant_sdk.sketchfab.search(query='q', type='models')",
-                "notes": "SDK (execute_code): Search Sketchfab.",
-                "returns": "{'success': bool?, 'results': [...], 'count': int?}",
-            },
-            "sketchfab.download": {
-                "sdkUsage": "assistant_sdk.sketchfab.download(uid='uid')",
-                "notes": "SDK (execute_code): Download model from Sketchfab.",
-                "returns": "{'success': bool, 'path': str?, 'message': str?}",
-            },
-            # Research
-            "research.research_topic": {
-                "sdkUsage": "assistant_sdk.research.research_topic(topic='topic')",
-                "notes": "Perform deep research on a topic using RAG, Web, and Memory.",
-                "returns": "str (Final answer)",
-            },
-            # Web
-            "web.web_search": {
-                "sdkUsage": "assistant_sdk.web.web_search(query='query', num_results=5)",
-                "notes": "Search the web (DuckDuckGo).",
-                "returns": "{'results': [{'title': str, 'url': str, 'snippet': str}], 'formatted': str}",
-            },
-            "web.fetch_webpage": {
-                "sdkUsage": "assistant_sdk.web.fetch_webpage(url='url', max_length=10000)",
-                "notes": "Fetch and extract text from a webpage.",
-                "returns": "{'success': bool, 'text': str, 'length': int}",
-            },
-            # RAG
-            "rag.query": {
-                "sdkUsage": "assistant_sdk.rag.query(text='question')",
-                "notes": "SDK (execute_code): Query documentation.",
-                "returns": "{'results': [{'title': str, 'url': str, 'excerpt': str, 'source': str}], 'count': int}",
-            },
-            # Memory
-            "memory.remember_fact": {
-                "sdkUsage": "assistant_sdk.memory.remember_fact(fact='fact', category='general')",
-                "notes": "SDK (execute_code): Store a general fact.",
-                "returns": "{'success': bool}",
-            },
-            "memory.remember_preference": {
-                "sdkUsage": "assistant_sdk.memory.remember_preference(key='key', value='value')",
-                "notes": "SDK (execute_code): Store a user preference.",
-                "returns": "{'success': bool}",
-            },
-            "memory.remember_learning": {
-                "sdkUsage": "assistant_sdk.memory.remember_learning(topic='topic', insight='insight')",
-                "notes": "SDK (execute_code): Record a technical learning/pitfall.",
-                "returns": "{'success': bool}",
-            },
-            "memory.search": {
-                "sdkUsage": "assistant_sdk.memory.search(query='query')",
-                "notes": "SDK (execute_code): Semantic search of memory.",
-                "returns": "{'results': [{'type': str, 'key': str, 'value': str}], 'count': int}",
-            },
+            # Common aliases
+            "search": "polyhaven.search",
+            "download": "polyhaven.download",
+            "scene": "blender.get_scene_info",
+            "info": "blender.get_object_info",
         }
 
+        # Get all registered tools dynamically
+        all_tools = tool_registry.get_tools_list()
         results = []
 
         for q in queries:
-            # Normalize query: remove 'assistant_sdk.' prefix, handle 'tool/subtool'
+            # Normalize query: remove 'assistant_sdk.' prefix
             clean_q = q.replace("assistant_sdk.", "").lower()
+            
+            # Check manual docs first (for workflows/aliases)
+            if clean_q in sdk_docs:
+                entry = sdk_docs[clean_q]
+                # If it's an alias string, resolve it
+                if isinstance(entry, str):
+                    clean_q = entry # Resolve alias and continue to dynamic lookup
+                else:
+                    # It's a virtual tool/workflow
+                    results.append({
+                        "tool": clean_q,
+                        "sdkUsage": entry.get("sdkUsage", "N/A"),
+                        "notes": entry.get("notes", ""),
+                        "returns": entry.get("returns", "dict"),
+                        "workflow": entry.get("workflow", None)
+                    })
+                    continue
 
             # Split by slash if present (e.g. "polyhaven.search/download")
             sub_queries = clean_q.split("/")
-
+            
             for sub_q in sub_queries:
                 sub_q = sub_q.strip()
                 if not sub_q:
                     continue
 
-                # 1. Exact match
-                if sub_q in sdk_docs:
-                    res = sdk_docs[sub_q]
-                    # res["alias"] = sub_q <-- REMOVED
-                    results.append(res)
-                    continue
-
-                # 2. Namespace match (e.g., "polyhaven")
-                namespace_matches = [
-                    k for k in sdk_docs.keys() if k.startswith(sub_q + ".")
-                ]
-                if namespace_matches:
-                    for k in namespace_matches:
-                        res = sdk_docs[k].copy()
-                        # res["alias"] = k  <-- REMOVED
-                        results.append(res)
-                    continue
-
-                # 3. Fuzzy/Contains match
-                fuzzy_matches = [k for k in sdk_docs.keys() if sub_q in k]
-                if fuzzy_matches:
-                    for k in fuzzy_matches:
-                        res = sdk_docs[k].copy()
-                        # res["alias"] = k <-- REMOVED
-                        results.append(res)
-                    continue
+                # Handle namespace.tool_name (e.g., polyhaven.download_polyhaven -> download_polyhaven)
+                query_parts = sub_q.split(".")
+                query_tool_name = query_parts[-1]
+                
+                found_for_query = False
+                
+                for t in all_tools:
+                    t_name = t["name"]
+                    t_cat = t.get("category", "Other").lower()
+                    
+                    # Check for match
+                    is_match = False
+                    
+                    # 1. Exact match on tool name
+                    if query_tool_name == t_name.lower():
+                        is_match = True
+                    
+                    # 2. Namespace match (e.g. "polyhaven" matches all tools in PolyHaven category)
+                    elif query_tool_name == t_cat:
+                        is_match = True
+                        
+                    # 3. Substring match (if query is specific enough)
+                    elif len(query_tool_name) > 3 and query_tool_name in t_name.lower():
+                        is_match = True
+                        
+                    if is_match:
+                        # Format usage string
+                        schema = t["inputSchema"]
+                        props = schema.get("properties", {})
+                        args_list = []
+                        for prop_name, prop_info in props.items():
+                            arg_str = f"{prop_name}"
+                            if "default" in prop_info:
+                                arg_str += f"={repr(prop_info['default'])}"
+                            args_list.append(arg_str)
+                        
+                        # Construct namespace for usage (e.g. assistant_sdk.polyhaven.download_polyhaven)
+                        # We use the category as the namespace
+                        usage = f"assistant_sdk.{t_cat}.{t_name}({', '.join(args_list)})"
+                        
+                        results.append({
+                            "tool": t_name,
+                            "sdkUsage": usage,
+                            "notes": t["description"],
+                            "returns": "Dict (see description)",
+                            "category": t_cat
+                        })
+                        found_for_query = True
+                
+                if not found_for_query:
+                    # No match found
+                    pass
 
         # Remove duplicates
         unique_results = []
         seen = set()
         for r in results:
-            # Use sdkUsage as unique key since alias is gone
             key = r["sdkUsage"]
             if key not in seen:
                 seen.add(key)
@@ -1938,7 +1819,6 @@ def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
 
     except Exception as e:
         import traceback
-
         return {"error": f"Help failed: {str(e)}", "traceback": traceback.format_exc()}
 
 
@@ -1950,52 +1830,17 @@ def register():
     tool_registry.register_tool(
         "get_scene_info",
         get_scene_info,
-        "Outliner-style, persistent scene view (hierarchical, compact, stateful).",
+        "Get the scene state in an AST-like format. Use this to verify changes.",
         {
             "type": "object",
             "properties": {
                 "expand_depth": {
                     "type": "integer",
-                    "description": "Default expansion depth from root",
-                    "default": 1,
+                    "description": "Depth of hierarchy to expand (default: 2)",
+                    "default": 2,
                     "minimum": 0,
                     "maximum": 6,
-                },
-                "expand": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Additional node paths to expand (e.g., 'SolarSystem/Planets')",
-                },
-                "focus": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Nodes to auto-expand and include ancestors",
-                },
-                "fold_state": {
-                    "type": "object",
-                    "description": "Opaque expansion state (pass from prior call)",
-                },
-                "max_children": {
-                    "type": "integer",
-                    "description": "Max children per node",
-                    "default": 50,
-                    "minimum": 1,
-                    "maximum": 500,
-                },
-                "include_icons": {
-                    "type": "boolean",
-                    "description": "Include presence icons on nodes",
-                    "default": True,
-                },
-                "include_counts": {
-                    "type": "boolean",
-                    "description": "Include type counts on collections",
-                    "default": True,
-                },
-                "root_filter": {
-                    "type": "string",
-                    "description": "Start rendering from a specific collection name",
-                },
+                }
             },
             "required": [],
         },

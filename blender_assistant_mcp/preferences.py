@@ -2153,7 +2153,12 @@ class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
         prefs.tool_config_items.clear()
 
         # Add all registered tools
+        # Add all registered tools
         for name, tool_data in tool_registry._TOOLS.items():
+            # Hide CORE TOOLS from UI (they are auto-injected for Agents)
+            if name in ["execute_code", "assistant_help"]:
+                continue
+                
             item = prefs.tool_config_items.add()
             item.name = name
             item.category = tool_data.get("category", "Other")
@@ -2292,14 +2297,17 @@ def register():
                     default_enabled = []
 
                 for name, tool_data in tool_registry._TOOLS.items():
+                    if name in ["execute_code", "assistant_help"]:
+                        continue
+
                     if name not in existing_names:
                         # Add new tool
                         item = prefs.tool_config_items.add()
                         item.name = name
                         item.category = tool_data.get("category", "Other")
                         item.description = tool_data.get("description", "")
-                        # Enable by default if in schema_tools OR if it's a core tool
-                        item.enabled = name in default_enabled or name == "execute_code"
+                        # Enable by default if in schema_tools OR if it's a core tool (fallback logic)
+                        item.enabled = name in default_enabled
                         print(f"[Tool Config] Added new tool: {name}")
                     else:
                         # Update description/category of existing tool

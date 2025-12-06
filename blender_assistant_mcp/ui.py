@@ -7,7 +7,318 @@ _expanded_code_blocks = set()
 
 # Global set to track which JSON hierarchy nodes are expanded (message_idx, path)
 # Global set to track which JSON hierarchy nodes are expanded (message_idx, path)
-_expanded_json_nodes = set()
+# Global set to track which details blocks are expanded (message_idx, block_idx)
+_expanded_details_blocks = set()
+
+
+class MarkdownRenderer:
+    """Helper to render Markdown-formatted text in Blender UI."""
+
+    @staticmethod
+    def render(layout, text, message_index):
+        """Render the text into the layout."""
+        import textwrap
+        
+        lines = text.split("\n")
+        
+        in_code_block = False
+        code_block_lines = []
+        code_lang = ""
+        
+        in_details_block = False
+        details_lines = []
+        details_summary = ""
+        
+        block_idx = 0
+        
+        # Simple block parser
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            # Don't strip indentation blindly for code blocks, but for markdown blocks we generally care about content
+            # For simplicity, we strip for detection but keep content for some things.
+            stripped = line.strip()
+            
+            # Code Blocks
+            if stripped.startswith("```"):
+                if in_code_block:
+                    # End of block
+                    MarkdownRenderer.render_code_block(layout, code_block_lines, message_index, block_idx)
+                    code_block_lines = []
+                    in_code_block = False
+                    block_idx += 1
+                else:
+                    # Start of block
+                    in_code_block = True
+                    # code_lang = stripped[3:].strip()
+                i += 1
+                continue
+                
+            if in_code_block:
+                code_block_lines.append(line)
+                i += 1
+                continue
+            
+            # Headers
+            if stripped.startswith("#"):
+                # Count hashes
+                level = 0
+                for char in stripped:
+                    if char == "#":
+                        level += 1
+                    else:
+                        break
+                
+                # Verify space after hashes
+                if 1 <= level <= 6 and len(stripped) > level and stripped[level] == " ":
+                    content = stripped[level:].strip()
+                    MarkdownRenderer.render_header(layout, content, level)
+                    i += 1
+                    continue
+            
+            # List Items (Unordered)
+            if stripped.startswith("- ") or stripped.startswith("* "):
+                MarkdownRenderer.render_list_item(layout, stripped[2:].strip(), ordered=False)
+                i += 1
+                continue
+            
+            # List Items (Ordered) - Basic detection "1. "
+            if len(stripped) >= 3 and stripped[0].isdigit() and stripped[1] == "." and stripped[2] == " ":
+                 parts = stripped.split(" ", 1)
+                 if len(parts) == 2:
+                    MarkdownRenderer.render_list_item(layout, parts[1], ordered=True, number=parts[0])
+                    i += 1
+                    continue
+
+            # Quotes
+            if stripped.startswith("> "):
+                MarkdownRenderer.render_quote(layout, stripped[2:].strip())
+                i += 1
+                continue
+
+            # Paragraphs
+            # Group consecutive text lines until a block starter is found
+            paragraph_lines = [line]
+            j = i + 1
+            while j < len(lines):
+                next_line = lines[j]
+                next_stripped = next_line.strip()
+                
+                # Check for block starters
+                is_block_start = (
+                    next_stripped.startswith("```") or
+                    (next_stripped.startswith("#") and " " in next_stripped) or
+                    next_stripped.startswith("- ") or
+                    next_stripped.startswith("* ") or
+                    (len(next_stripped) >= 3 and next_stripped[0].isdigit() and next_stripped[1] == "." and next_stripped[2] == " ") or
+                    next_stripped.startswith("> ")
+                )
+                
+                if is_block_start:
+                    break
+                    
+                paragraph_lines.append(next_line)
+                j += 1
+            
+            # Render the gathered paragraph
+            full_para = "\n".join(paragraph_lines)
+            if full_para.strip():
+                 MarkdownRenderer.render_paragraph(layout, full_para)
+            else:
+                 # It's an empty line/spacer
+                 if len(paragraph_lines) > 0 and not any(p.strip() for p in paragraph_lines):
+                     # Just vertical space if needed, or ignore
+                     pass
+            # <details> / <summary> Handling
+            if stripped.startswith("<details>"):
+                # Start details block
+                in_details_block = True
+                details_lines = []
+                details_summary = "Details" # Default
+                i += 1
+                continue
+            
+            if in_details_block:
+                if stripped.startswith("</details>"):
+                     MarkdownRenderer.render_details_block(layout, details_summary, details_lines, message_index, block_idx)
+                     block_idx += 1
+                     in_details_block = False
+                     details_lines = []
+                elif stripped.startswith("<summary>") and "</summary>" in stripped:
+                     # One line summary
+                     details_summary = stripped.replace("<summary>", "").replace("</summary>", "").strip()
+                elif stripped.startswith("<summary>"):
+                     # Start of summary (multiline?) - simplified support for single line
+                     details_summary = stripped.replace("<summary>", "").strip()
+                else:
+                     details_lines.append(line)
+                i += 1
+                continue
+
+            # Handle unclosed code block
+            if in_code_block and code_block_lines:
+             MarkdownRenderer.render_code_block(layout, code_block_lines, message_index, block_idx)
+
+    @staticmethod
+    def render_header(layout, text, level):
+        row = layout.row()
+        row.alignment = 'LEFT'
+        # Emulate visual distinction for headers
+        if level <= 2:
+            # H1/H2 - Use a box label or icon to make it pop?
+            # A box around a header might be too much, but let's try just bold-like distinction
+            row.label(text=text, icon="FAKE_USER_ON") # Kind of bold-looking icon
+        else:
+             row.label(text=text, icon="SMALL_TRI_RIGHT_VEC")
+
+    @staticmethod
+    def render_list_item(layout, text, ordered=False, number=""):
+        row = layout.row()
+        split = row.split(factor=0.08)
+        split.alignment = 'RIGHT'
+        
+        bullet = f"{number}" if ordered else "•"
+        split.label(text=bullet)
+        
+        right_col = split.column()
+        # Render the text content wrapping
+        MarkdownRenderer.render_paragraph(right_col, text)
+
+    @staticmethod
+    def render_quote(layout, text):
+        box = layout.box()
+        row = box.row()
+        row.alignment = 'LEFT'
+        # Use TEXT icon for quotes
+        row.label(text=text, icon="TEXT")
+        
+        # If text is long, we might need wrapping too inside the quote
+        # But 'label' chops it. let's use paragraph renderer if it's long?
+        # Re-rendering inside the box:
+        # Actually MarkdownRenderer.render_paragraph(box.column(), text) is better
+        # but the icon trick above is nice for short quotes. 
+        # Let's clean up:
+        if len(text) > 40:
+             MarkdownRenderer.render_paragraph(box.column(), text)
+        
+    @staticmethod
+    def render_code_block(layout, code_lines, message_index, block_index):
+        # Access the global tracking set
+        global _expanded_code_blocks
+        
+        box = layout.box()
+        header_row = box.row(align=True)
+
+        block_key = (message_index, block_index)
+        is_expanded = block_key in _expanded_code_blocks
+
+        # Toggle button
+        icon = "TRIA_DOWN" if is_expanded else "TRIA_RIGHT"
+        toggle_op = header_row.operator(
+            "assistant.toggle_code_block",
+            text="",
+            icon=icon,
+            emboss=False,
+        )
+        toggle_op.message_index = message_index
+        toggle_op.block_index = block_index
+
+        header_row.label(
+            text=f"Code ({len(code_lines)} lines):", icon="CONSOLE"
+        )
+
+        copy_op = header_row.operator(
+            "assistant.copy_code_block",
+            text="",
+            icon="COPYDOWN",
+            emboss=False,
+        )
+        copy_op.message_index = message_index
+        copy_op.block_index = block_index
+
+        if is_expanded:
+            code_col = box.column(align=True)
+            # Show more lines than before
+            limit = 60
+            for code_line in code_lines[:limit]:
+                code_col.label(text=code_line if code_line else " ")
+            if len(code_lines) > limit:
+                code_col.label(
+                    text="... (code truncated, copy message for full code)"
+                )
+
+    @staticmethod
+    def render_details_block(layout, summary, content_lines, message_index, block_index):
+        global _expanded_details_blocks
+        
+        box = layout.box()
+        header_row = box.row(align=True)
+        
+        block_key = (message_index, block_index)
+        is_expanded = block_key in _expanded_details_blocks
+        
+        # Toggle Operator
+        icon = "TRIA_DOWN" if is_expanded else "TRIA_RIGHT"
+        
+        # We need a new operator or reuse one. Let's reuse 'toggle_code_block' but we need to distiguish type?
+        # Actually toggle_code_block uses '_expanded_code_blocks'.
+        # We need a new operator 'assistant.toggle_details_block'
+        
+        toggle_op = header_row.operator(
+            "assistant.toggle_details_block",
+            text="",
+            icon=icon,
+            emboss=False
+        )
+        toggle_op.message_index = message_index
+        toggle_op.block_index = block_index
+        
+        header_row.label(text=summary, icon="INFO")
+        
+        if is_expanded:
+            col = box.column(align=True)
+            # Recursively render content (so markdown inside details works!)
+            full_text = "\n".join(content_lines)
+            MarkdownRenderer.render(col, full_text, float(f"{message_index}.{block_index}")) 
+            # Note: Recursive ID might be tricky. 
+            # For simplicity, let's just render paragraphs for now, to avoid infinite recursion specific ID issues
+            # Or just pass message_index. Collisions might happen if nested details.
+            # Let's simple render paragraphs.
+            
+            MarkdownRenderer.render_paragraph(col, full_text)
+
+    @staticmethod
+    def render_paragraph(layout, text):
+        import textwrap
+        # Similar to original wrapping logic but reusable
+        width = 85 
+        
+        lines = text.split("\n")
+        for line in lines:
+            if len(line) > width:
+                wrapped = textwrap.wrap(line, width=width)
+                for w in wrapped:
+                    layout.label(text=w if w else " ")
+            else:
+                 layout.label(text=line if line else " ")
+
+
+class AssistantTaskItem(bpy.types.PropertyGroup):
+    """A single task item in the assistant's todo list."""
+    name: bpy.props.StringProperty(name="Task Name")
+    status: bpy.props.EnumProperty(
+        name="Status",
+        items=[
+            ("TODO", "To Do", "Task is pending"),
+            ("IN_PROGRESS", "In Progress", "Task is currently being worked on"),
+            ("DONE", "Done", "Task is completed"),
+            ("FAILED", "Failed", "Task failed to complete"),
+            ("SKIPPED", "Skipped", "Task was skipped"),
+        ],
+        default="TODO"
+    )
+    notes: bpy.props.StringProperty(name="Notes", description="Additional notes or checkpoint details")
+
 
 
 class AssistantChatMessage(bpy.types.PropertyGroup):
@@ -22,6 +333,7 @@ class AssistantChatSession(bpy.types.PropertyGroup):
     """A chat session containing multiple messages"""
     name: bpy.props.StringProperty(name="Name", default="Chat")
     messages: bpy.props.CollectionProperty(type=AssistantChatMessage)
+    tasks: bpy.props.CollectionProperty(type=AssistantTaskItem)
     created_at: bpy.props.StringProperty(name="Created At", default="")
     session_id: bpy.props.StringProperty(name="Session ID", default="")
 
@@ -263,7 +575,7 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
                 )
                 if selected_item.image_data:
                     header_row.label(text="📎 Image", icon="IMAGE_DATA")
-                header_row.operator("assistant.copy_message", text="", icon="COPYDOWN")
+                header_row.operator("assistant.copy_message", text="Copy", icon="COPYDOWN")
 
                 # Show image preview if attached
                 if selected_item.image_data:
@@ -337,92 +649,7 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
                     lines = content.split("\n")
 
                 # Process content line by line, detecting code blocks
-                in_code_block = False
-                code_block_lines = []
-                code_blocks = []  # Store all code blocks found
-                line_count = 0
-                max_lines = 30
-
-                # First pass - extract all code blocks
-                for line in lines:
-                    if line.strip().startswith("```"):
-                        if in_code_block:
-                            # End of code block
-                            if code_block_lines:
-                                code_blocks.append(list(code_block_lines))
-                                code_block_lines = []
-                            in_code_block = False
-                        else:
-                            # Start of code block
-                            in_code_block = True
-                        continue
-
-                    if in_code_block:
-                        code_block_lines.append(line)
-                    else:
-                        # Regular text - wrap and display
-                        if line_count >= max_lines:
-                            box.label(
-                                text="... (truncated, copy to see full text)",
-                                icon="INFO",
-                            )
-                            break
-                        if len(line) > 80:
-                            wrapped = textwrap.wrap(line, width=80)
-                            for wrapped_line in wrapped:
-                                box.label(text=wrapped_line if wrapped_line else " ")
-                                line_count += 1
-                        else:
-                            box.label(text=line if line else " ")
-                            line_count += 1
-
-                # Handle unclosed code block
-                if in_code_block and code_block_lines:
-                    code_blocks.append(list(code_block_lines))
-
-                # Display all code blocks as collapsible (default collapsed)
-                for idx, code_lines in enumerate(code_blocks):
-                    code_box = box.box()
-                    header_row = code_box.row(align=True)
-
-                    # Check if this code block is expanded
-                    block_key = (wm.assistant_chat_message_index, idx)
-                    is_expanded = block_key in _expanded_code_blocks
-
-                    # Toggle button
-                    icon = "TRIA_DOWN" if is_expanded else "TRIA_RIGHT"
-                    toggle_op = header_row.operator(
-                        "assistant.toggle_code_block",
-                        text="",
-                        icon=icon,
-                        emboss=False,
-                    )
-                    toggle_op.message_index = wm.assistant_chat_message_index
-                    toggle_op.block_index = idx
-
-                    header_row.label(
-                        text=f"Code ({len(code_lines)} lines):", icon="CONSOLE"
-                    )
-
-                    # Copy button for this code block
-                    copy_op = header_row.operator(
-                        "assistant.copy_code_block",
-                        text="",
-                        icon="COPYDOWN",
-                        emboss=False,
-                    )
-                    copy_op.message_index = wm.assistant_chat_message_index
-                    copy_op.block_index = idx
-
-                    # Show code content if expanded
-                    if is_expanded:
-                        code_col = code_box.column(align=True)
-                        for code_line in code_lines[:30]:
-                            code_col.label(text=code_line if code_line else " ")
-                        if len(code_lines) > 30:
-                            code_col.label(
-                                text="... (code truncated, copy message for full code)"
-                            )
+                MarkdownRenderer.render(box, content, wm.assistant_chat_message_index)
 
                 # Action buttons
                 footer_row = box.row()
@@ -683,9 +910,9 @@ class ASSISTANT_OT_rename_chat(bpy.types.Operator):
         return {"FINISHED"}
 
 
+
 class ASSISTANT_OT_toggle_code_block(bpy.types.Operator):
     """Toggle code block expansion"""
-
     bl_idname = "assistant.toggle_code_block"
     bl_label = "Toggle Code Block"
     bl_options = {"REGISTER"}
@@ -695,13 +922,76 @@ class ASSISTANT_OT_toggle_code_block(bpy.types.Operator):
 
     def execute(self, context):
         global _expanded_code_blocks
-        block_key = (self.message_index, self.block_index)
-        if block_key in _expanded_code_blocks:
-            _expanded_code_blocks.remove(block_key)
+        key = (self.message_index, self.block_index)
+        if key in _expanded_code_blocks:
+            _expanded_code_blocks.remove(key)
         else:
-            _expanded_code_blocks.add(block_key)
+            _expanded_code_blocks.add(key)
+        
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+        return {"FINISHED"}
 
-        # Trigger UI redraw
+
+class ASSISTANT_OT_copy_code_block(bpy.types.Operator):
+    """Copy code block content to clipboard"""
+    bl_idname = "assistant.copy_code_block"
+    bl_label = "Copy Code"
+    bl_options = {"REGISTER"}
+
+    message_index: bpy.props.IntProperty()
+    block_index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        # Retrieve message and extract code block
+        wm = context.window_manager
+        if wm.assistant_chat_sessions:
+             session = wm.assistant_chat_sessions[wm.assistant_active_chat_index]
+             if self.message_index < len(session.messages):
+                 msg = session.messages[self.message_index]
+                 # Simple re-extraction logic
+                 lines = msg.content.split("\n")
+                 current_block = 0
+                 in_block = False
+                 code_lines = []
+                 for line in lines:
+                     if line.strip().startswith("```"):
+                         if in_block:
+                             if current_block == self.block_index:
+                                 break # Found it and finished
+                             in_block = False
+                             current_block += 1
+                             code_lines = []
+                         else:
+                             in_block = True
+                         continue
+                     if in_block and current_block == self.block_index:
+                         code_lines.append(line)
+                 
+                 if code_lines:
+                     context.window_manager.clipboard = "\n".join(code_lines)
+                     self.report({'INFO'}, "Code copied to clipboard")
+        return {"FINISHED"}
+
+
+class ASSISTANT_OT_toggle_details_block(bpy.types.Operator):
+    """Toggle visibility of a detailed info block"""
+    bl_idname = "assistant.toggle_details_block"
+    bl_label = "Toggle Details"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    message_index: bpy.props.IntProperty()
+    block_index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        key = (self.message_index, self.block_index)
+        global _expanded_details_blocks
+        if key in _expanded_details_blocks:
+            _expanded_details_blocks.remove(key)
+        else:
+            _expanded_details_blocks.add(key)
+            
         for area in context.screen.areas:
             if area.type == "VIEW_3D":
                 area.tag_redraw()
@@ -1566,6 +1856,7 @@ def update_active_chat(self, context):
 
 def register():
     # Register window manager properties
+    bpy.utils.register_class(AssistantTaskItem)
     bpy.utils.register_class(AssistantChatMessage)
     bpy.utils.register_class(AssistantChatSession)
     
@@ -1597,6 +1888,7 @@ def register():
     bpy.utils.register_class(ASSISTANT_OT_delete_chat)
     bpy.utils.register_class(ASSISTANT_OT_rename_chat)
     bpy.utils.register_class(ASSISTANT_OT_toggle_code_block)
+    bpy.utils.register_class(ASSISTANT_OT_toggle_details_block)
     bpy.utils.register_class(ASSISTANT_OT_toggle_json_node)
     bpy.utils.register_class(ASSISTANT_OT_copy_code_block)
     bpy.utils.register_class(ASSISTANT_OT_paste_text)
@@ -1640,6 +1932,7 @@ def unregister():
     bpy.utils.unregister_class(ASSISTANT_OT_paste_text)
     bpy.utils.unregister_class(ASSISTANT_OT_copy_code_block)
     bpy.utils.unregister_class(ASSISTANT_OT_toggle_json_node)
+    bpy.utils.unregister_class(ASSISTANT_OT_toggle_details_block)
     bpy.utils.unregister_class(ASSISTANT_OT_toggle_code_block)
     bpy.utils.unregister_class(ASSISTANT_UL_chat)
 

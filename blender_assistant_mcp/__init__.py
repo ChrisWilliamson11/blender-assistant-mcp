@@ -33,7 +33,7 @@ from .tools import (
     web_tools,
     memory_tools,
     task_tools,
-    research_tools,
+
 )
 from . import (
     preferences,
@@ -55,7 +55,7 @@ _modules = [
     web_tools,
     memory_tools,
     task_tools,
-    research_tools,
+
     assistant,
 ]
 

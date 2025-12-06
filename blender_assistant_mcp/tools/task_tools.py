@@ -8,44 +8,47 @@ from . import tool_registry
 # Data Structures (Blender Properties)
 # -----------------------------------------------------------------------------
 
-class AssistantTaskItem(bpy.types.PropertyGroup):
-    """A single task item in the assistant's todo list."""
-    name: bpy.props.StringProperty(name="Task Name")
-    status: bpy.props.EnumProperty(
-        name="Status",
-        items=[
-            ("TODO", "To Do", "Task is pending"),
-            ("IN_PROGRESS", "In Progress", "Task is currently being worked on"),
-            ("DONE", "Done", "Task is completed"),
-            ("FAILED", "Failed", "Task failed to complete"),
-            ("SKIPPED", "Skipped", "Task was skipped"),
-        ],
-        default="TODO"
-    )
-    notes: bpy.props.StringProperty(name="Notes", description="Additional notes or checkpoint details")
+# -----------------------------------------------------------------------------
+# Data Structures
+# -----------------------------------------------------------------------------
+# AssistantTaskItem is defined in ui.py to be part of AssistantChatSession
+# We access it via wm.assistant_chat_sessions[wm.assistant_active_chat_index].tasks
 
 # -----------------------------------------------------------------------------
 # Tools
 # -----------------------------------------------------------------------------
 
-def add_task(description: str) -> Dict[str, Any]:
+def _get_active_task_list():
+    """Helper to get the task list for the active chat session."""
+    wm = bpy.context.window_manager
+    if not wm.assistant_chat_sessions:
+        return None
+    idx = wm.assistant_active_chat_index
+    if idx < 0 or idx >= len(wm.assistant_chat_sessions):
+        return None
+    return wm.assistant_chat_sessions[idx].tasks
+
+def task_add(description: str) -> Dict[str, Any]:
     """Add a new task to the plan.
     
     Args:
         description: The task description (e.g., "Create base mesh")
     """
-    scene = bpy.context.scene
-    item = scene.assistant_tasks.add()
+    tasks = _get_active_task_list()
+    if tasks is None:
+         return {"success": False, "error": "No active chat session found."}
+
+    item = tasks.add()
     item.name = description
     item.status = "TODO"
     
     return {
         "success": True, 
         "message": f"Added task: {description}", 
-        "task_index": len(scene.assistant_tasks) - 1
+        "task_index": len(tasks) - 1
     }
 
-def update_task(index: int, status: str, notes: str = "") -> Dict[str, Any]:
+def task_update(index: int, status: str, notes: str = "") -> Dict[str, Any]:
     """Update a task's status and notes (Checkpoint).
     
     Args:
@@ -53,11 +56,14 @@ def update_task(index: int, status: str, notes: str = "") -> Dict[str, Any]:
         status: New status (TODO, IN_PROGRESS, DONE, FAILED, SKIPPED)
         notes: Optional notes or verification results
     """
-    scene = bpy.context.scene
-    if index < 0 or index >= len(scene.assistant_tasks):
+    tasks = _get_active_task_list()
+    if tasks is None:
+         return {"success": False, "error": "No active chat session found."}
+
+    if index < 0 or index >= len(tasks):
         return {"success": False, "error": f"Invalid task index: {index}"}
     
-    item = scene.assistant_tasks[index]
+    item = tasks[index]
     
     # Validate status
     valid_statuses = {"TODO", "IN_PROGRESS", "DONE", "FAILED", "SKIPPED"}
@@ -78,27 +84,37 @@ def update_task(index: int, status: str, notes: str = "") -> Dict[str, Any]:
         }
     }
 
-def list_tasks() -> Dict[str, Any]:
+def task_complete(index: int) -> Dict[str, Any]:
+    """Mark a task as DONE and provide a summary log."""
+    return task_update(index, "DONE")
+
+def task_list() -> Dict[str, Any]:
     """List all tasks and their current status."""
-    scene = bpy.context.scene
-    tasks = []
-    for i, item in enumerate(scene.assistant_tasks):
-        tasks.append({
+    tasks = _get_active_task_list()
+    if tasks is None:
+         return {"message": "No active chat session found."}
+
+    output_tasks = []
+    for i, item in enumerate(tasks):
+        output_tasks.append({
             "index": i,
             "name": item.name,
             "status": item.status,
             "notes": item.notes
         })
         
-    if not tasks:
+    if not output_tasks:
         return {"message": "No tasks in plan."}
         
-    return {"tasks": tasks}
+    return {"tasks": output_tasks}
 
-def clear_tasks() -> Dict[str, Any]:
+def task_clear() -> Dict[str, Any]:
     """Clear all tasks from the plan."""
-    scene = bpy.context.scene
-    scene.assistant_tasks.clear()
+    tasks = _get_active_task_list()
+    if tasks is None:
+         return {"success": False, "error": "No active chat session found."}
+    
+    tasks.clear()
     return {"success": True, "message": "Task list cleared."}
 
 # -----------------------------------------------------------------------------
@@ -107,14 +123,15 @@ def clear_tasks() -> Dict[str, Any]:
 
 def register():
     """Register tools and properties."""
-    # Register PropertyGroup
-    bpy.utils.register_class(AssistantTaskItem)
-    bpy.types.Scene.assistant_tasks = bpy.props.CollectionProperty(type=AssistantTaskItem)
+    # AssistantTaskItem is registered in ui.py now, and attached to AssistantChatSession
+    # We used to register it here but moved it for scope control.
+    # bpy.utils.register_class(AssistantTaskItem)
+    # bpy.types.Scene.assistant_tasks = bpy.props.CollectionProperty(type=AssistantTaskItem)
     
     # Register Tools
     tool_registry.register_tool(
-        "add_task",
-        add_task,
+        "task_add",
+        task_add,
         "Add a new task to the plan.",
         {
             "type": "object",
@@ -127,8 +144,8 @@ def register():
     )
     
     tool_registry.register_tool(
-        "update_task",
-        update_task,
+        "task_update",
+        task_update,
         "Update a task's status and add notes (Checkpoint).",
         {
             "type": "object",
@@ -141,10 +158,24 @@ def register():
         },
         category="Planning"
     )
+
+    tool_registry.register_tool(
+        "task_complete",
+        task_complete,
+        "Mark a task as DONE.",
+        {
+            "type": "object",
+            "properties": {
+                "index": {"type": "integer", "description": "Task index (0-based)"}
+            },
+            "required": ["index"]
+        },
+        category="Planning"
+    )
     
     tool_registry.register_tool(
-        "list_tasks",
-        list_tasks,
+        "task_list",
+        task_list,
         "List all tasks and their status.",
         {
             "type": "object",
@@ -155,8 +186,8 @@ def register():
     )
     
     tool_registry.register_tool(
-        "clear_tasks",
-        clear_tasks,
+        "task_clear",
+        task_clear,
         "Clear the task list.",
         {
             "type": "object",
@@ -170,4 +201,4 @@ def unregister():
     """Unregister tools and properties."""
     if hasattr(bpy.types.Scene, "assistant_tasks"):
         del bpy.types.Scene.assistant_tasks
-    bpy.utils.unregister_class(AssistantTaskItem)
+    # bpy.utils.unregister_class(AssistantTaskItem) # Registered in ui.py

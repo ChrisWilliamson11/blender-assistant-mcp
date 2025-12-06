@@ -168,8 +168,8 @@ def chat_completion(
                         continue
 
                     # Debug: Show raw JSON to diagnose thinking fields
-                    if debug_mode and not obj.get("done"):
-                        print(f"[Ollama Adapter] Chunk: {json.dumps(obj)}")
+                    # if debug_mode and not obj.get("done"):
+                    #     print(f"[Ollama Adapter] Chunk: {json.dumps(obj)}")
 
                     # Accumulate message/content
                     msg = obj.get("message")

@@ -26,7 +26,6 @@ class ToolManager:
             "search_memory",
             "capture_viewport_for_vision",
             "rag_query",
-            "research_topic",
             "web_search",
             "fetch_webpage",
         }
@@ -88,42 +87,86 @@ class ToolManager:
                 })
         return tools
 
-    def get_system_prompt_hints(self, enabled_tools: Set[str]) -> str:
-        """Generate SDK hints for tools that are NOT enabled natively."""
-        lines = []
+    def get_system_prompt_hints(self, enabled_tools: Set[str], allowed_tools: Set[str] = None) -> str:
+        """Generate SDK hints for tools that are NOT enabled natively.
+        
+        Args:
+            enabled_tools: Tools that are enabled as MCP (schemas injected).
+            allowed_tools: Validation set interaction. Only show hints for tools in this set (Universe).
+                           If None, shows all known tools (legacy behavior).
+        """
+        # Group tools by namespace
+        tools_by_namespace = {}
         all_tools = tool_registry.get_tools_list()
         
-        # Sort by category then name for better organization
-        sorted_tools = sorted(all_tools, key=lambda x: (x.get("category", "Other"), x.get("name")))
-        
-        for tool in sorted_tools:
+        for tool in all_tools:
             name = tool.get("name")
             
-            # Skip if natively enabled
+            # Skip if enabled as MCP (native)
             if name in enabled_tools:
+                continue
+                
+            # Skip if not allowed for this role (Universe restriction)
+            if allowed_tools is not None and name not in allowed_tools:
                 continue
                 
             category = tool.get("category", "Other")
             namespace = category.lower().replace(" ", "_").replace("-", "_")
             
-            # Construct SDK usage string
-            # e.g. assistant_sdk.blender.create_object(type, name)
-            schema = tool.get("inputSchema", {})
-            props = schema.get("properties", {})
-            arg_names = list(props.keys())
-            args_str = ", ".join(arg_names)
+            if namespace not in tools_by_namespace:
+                tools_by_namespace[namespace] = []
+            tools_by_namespace[namespace].append(name)
             
-            usage = f"assistant_sdk.{namespace}.{name}({args_str})"
-            desc = (tool.get("description", "") or "").strip()
+        if not tools_by_namespace:
+            return ""
+
+        lines = ["SDK CAPABILITIES (Use `assistant_help` to find tools):"]
+        for namespace, tools in sorted(tools_by_namespace.items()):
+            # Format: - namespace: tool1, tool2, ...
+            tool_list = ", ".join(sorted(tools))
+            lines.append(f"- **{namespace}**: {tool_list}")
             
-            # Truncate description if too long
-            if len(desc) > 150:
-                desc = desc[:147] + "..."
-                
-            lines.append(f"- {usage}: {desc}")
-                
-        header = "SDK TOOLS (Call via `execute_code`):\n"
-        return header + "\n".join(lines) if lines else ""
+        return "\n".join(lines)
+
+    def get_enabled_tools_for_role(self, role: str) -> Set[str]:
+        """Get the specific set of tools allowed for a given agent role."""
+        if role == "MANAGER":
+            return {
+                "get_object_info", "get_scene_info", "inspect_data", "search_data",
+                "remember_fact", "remember_learning", "remember_preference",
+                "task_add", "task_clear", "task_list", "task_update", "task_complete",
+                "consult_specialist",
+                "get_active", "get_selection", "capture_viewport_for_vision"
+            }
+        elif role == "TASK_AGENT":
+            return {
+                # Core
+                "execute_code", "assistant_help",
+                # Blender
+                "create_collection", "delete_collection", "get_collection_info", 
+                "list_collections", "move_to_collection", "set_collection_color",
+                "get_object_info", "get_scene_info", "inspect_data", "search_data",
+                "get_active", "get_selection", "select_by_type", "set_active", "set_selection",
+                # Polyhaven
+                "download_polyhaven", "search_polyhaven_assets",
+                # Web/RAG
+                "web_search", "fetch_webpage", "search_image_url", "search_wikimedia_image", 
+                "extract_image_urls_from_webpage", "download_image_as_texture", 
+                "rag_get_stats", "rag_query",
+                # Vision
+                "capture_viewport_for_vision",
+                # Sketchfab/Stock (if available)
+                "sketchfab_download", "sketchfab_login", "sketchfab_search",
+                "check_stock_photo_download", "download_stock_photo", "search_stock_photos"
+            }
+        elif role == "COMPLETION":
+            return {
+                "get_scene_info", "get_object_info", "inspect_data", "search_data", 
+                "list_collections", "task_list",
+                "get_active", "get_selection"
+            }
+        else:
+            return set()
 
     def get_compact_tool_list(self, enabled_tools: Set[str]) -> str:
         """Get a compact string representation of enabled tools for the system prompt."""

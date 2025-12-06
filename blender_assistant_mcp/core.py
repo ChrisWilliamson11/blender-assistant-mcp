@@ -8,12 +8,14 @@ and the ResponseParser class which handles LLM output parsing.
 import json
 import re
 import ast
+import queue
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass, field
 from .tools import tool_registry
 from .tool_manager import ToolManager
 from .memory import MemoryManager
 from .scene_watcher import SceneWatcher
+from .agent_manager import AgentTools
 
 @dataclass
 class ToolCall:
@@ -173,18 +175,57 @@ class ResponseParser:
 class AssistantSession:
     """Manages the state of a single assistant session."""
 
-    def __init__(self, model_name: str, tool_manager: ToolManager):
+    def __init__(self, model_name: str, tool_manager: ToolManager, llm_client=None):
         self.model_name = model_name
         self.tool_manager = tool_manager
         self.memory_manager = MemoryManager()
         self.scene_watcher = SceneWatcher()
+        self.execution_queue = queue.Queue()
+        self.agent_tools = AgentTools(
+            llm_client=llm_client, 
+            tool_manager=tool_manager, 
+            memory_manager=self.memory_manager,
+            message_callback=self.add_message,
+            get_model_name=self.get_model_name_from_prefs,
+            execution_queue=self.execution_queue,
+            on_agent_finish=self.on_agent_finish,
+            scene_watcher=self.scene_watcher,
+            session=self
+        ) # Initialize AgentTools
         self.history: List[Dict[str, str]] = []
         self.tool_queue: List[ToolCall] = []
         self.state = "IDLE" # IDLE, THINKING, EXECUTING, DONE
         self.last_error = None
         
-        # Load enabled tools
-        self.enabled_tools = self.tool_manager.get_enabled_tools()
+        # Load enabled tools (MANAGER ROLE)
+        # The main assistant is now the MANAGER and cannot EXECUTE code directly.
+        # It must delegate to TASK_AGENT.
+        self.enabled_tools = self.tool_manager.get_enabled_tools_for_role("MANAGER")
+
+        # Register consult_specialist tool
+        tool_registry.register_tool(
+            name="consult_specialist",
+            func=self.agent_tools.consult_specialist,
+            description="Delegate a task to a Worker Agent (TASK_AGENT) or Verify completion (COMPLETION). Returns a JSON with 'thought', 'code', and 'expected_changes'.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "role": {
+                        "type": "string",
+                        "description": "Agent role (TASK_AGENT, COMPLETION)",
+                        "enum": ["TASK_AGENT", "COMPLETION"]
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Specific task description for the agent"
+                    }
+                },
+                "required": ["role", "query"]
+            },
+            category="System"
+        )
+
+
 
     def add_message(self, role: str, content: str, name: str = None, images: List[str] = None):
         """Add a message to history."""
@@ -201,8 +242,8 @@ class AssistantSession:
 
     def get_system_prompt(self) -> str:
         """Build the system prompt based on enabled tools."""
-        compact_tools = self.tool_manager.get_compact_tool_list(self.enabled_tools)
-        sdk_hints = self.tool_manager.get_system_prompt_hints(self.enabled_tools)
+        mcp_tools = self.tool_manager.get_compact_tool_list(self.enabled_tools)
+        sdk_tools = self.tool_manager.get_system_prompt_hints(self.enabled_tools)
         memory_context = self.memory_manager.get_context()
         if not memory_context:
             memory_context = "(No memories yet)"
@@ -212,32 +253,29 @@ class AssistantSession:
         scene_context = ""
         if scene_changes:
             scene_context = f"SCENE UPDATES (Since last turn)\n{scene_changes}\n\n"
-        
+            
         return (
-            "You are Blender Assistant — control Blender by calling native tools or writing Python code using the Blender API & the Assistant_SDK.\n\n"
-            "CHAT PARTICIPANTS & INPUTS\n"
-            "- **User**: The human you are helping. Their messages come from the chat interface.\n"
-            "- **Assistant (You)**: Your responses and thoughts.\n"
-            "- **System/Blender**: Tool outputs, code execution results, and scene updates. These are NOT user messages, even if they appear in the chat history. Treat `execute_code` output as direct feedback from the Blender Python interpreter.\n\n"
+            "You are the Blender Assistant MANAGER. You CANNOT execute code or modify the scene directly.\n"
+            "**YOUR GOAL**: Plan and EXECUTE the task by delegating to the `TASK_AGENT`.\n"
+            "**CRITICAL**: Do NOT write a text plan. You must ACT using tools immediately.\n"
+            "**WORKFLOW**:\n"
+            "1.  Call `task_add` to log the first step.\n"
+            "2.  IMMEDIATELY call `consult_specialist(role='TASK_AGENT', query='...')` to execute it.\n"
+            "3.  Wait for the result, then call `task_complete`.\n"
+            "4.  Repeat for the next step.\n"
+            "5.  Use `remember_*` only for critical facts.\n\n"
+            "**DO NOT** Output a markdown list of steps. USE THE TOOLS.\n"
+            "CHAT PARTICIPANTS\n"
+            "- **User**: The human manager.\n"
+            "- **Manager (You)**: The planner. NO CODE EXECUTION.\n"
+            "- **Task Agent**: The worker who executes code/tools.\n"
+            "- **Completion Agent**: Verifier.\n\n"
             f"{scene_context}"
             "MEMORY\n"
             f"{memory_context}\n\n"
-            "BEHAVIOR\n"
-            "- **PLAN FIRST**: If a request is complex, briefly plan before executing.\n"
-            "- **ACCESS METHODS**: You have two ways to act:\n"
-            "  1. **Native Tools**: Call these directly (e.g., `get_scene_info`).\n"
-            "  2. **Python Code**: Use `execute_code` to run scripts. Use this for `assistant_sdk.*` methods and raw `bpy` commands.\n"
-            "- **FINDING TOOLS**: Do not guess tool names. Use `assistant_help` to find SDK methods, `rag_query` for docs, or `search_memory` for past solutions.\n"
-            "- **SCENE AWARENESS**: 'SCENE UPDATES' provide a SUMMARY of changes (added/modified objects). Use `inspect_data` or `get_scene_info(detailed=True)` to fetch detailed properties (like vertices, modifiers, or custom props) if needed.\n"
-            "- **CLEANUP**: Keep the scene organized. Use collections to group new objects.\n"
-            "- **VERIFY**: Always verify your actions.\n"
-            "- **TEST OVER GUESS**: If unsure about API behavior, write a small test script using `execute_code` instead of speculating.\n"
-            "- **LEARN**: Use `remember_learning` to record pitfalls or version quirks.\n\n"
-            "TOOLS\n"
-            f"{compact_tools}\n"
-            f"{compact_tools}\n"
-            f"{sdk_hints}\n\n"
-            "PROTOCOL & BEHAVIORAL RULES\n"
+            "TOOLS (Manager Only)\n"
+            f"{mcp_tools}\n"
+            "PROTOCOL & BEHAVIORAL RULES\n" 
             f"{self._load_protocol()}"
         )
 
@@ -256,6 +294,21 @@ class AssistantSession:
         # Fallback if file missing
         return "Follow standard coding best practices."
 
+    def get_model_name_from_prefs(self) -> Optional[str]:
+        """Fetch the currently selected model from Blender preferences."""
+        import bpy
+        try:
+            # We need to get the package name, but __package__ might not be available here directly.
+            # We can try to guess or use a hardcoded name if imported relatively
+            # Or assume standard name if we are consistent.
+            # Re-using the logic from __init__ (simplified)
+            pkg = __name__.split(".")[0]
+            prefs = bpy.context.preferences.addons[pkg].preferences
+            return prefs.model_file # Assuming 'model_file' is the property name
+        except Exception:
+             # Fallback to the one passed in Init if prefs fail, or None
+             return self.model_name
+             
     def process_response(self, response: Dict[str, Any]) -> List[ToolCall]:
         """Process a raw response from the LLM."""
         # Extract thinking/content for history
@@ -288,6 +341,17 @@ class AssistantSession:
         for call in calls:
             if call.tool in self.enabled_tools or call.tool == "execute_code":
                 valid_calls.append(call)
+            elif call.tool.startswith("assistant_sdk."):
+                # Auto-Translate SDK calls to execute_code
+                print(f"[Session] Auto-Translating SDK call '{call.tool}' to execute_code")
+                
+                # Construct Python code
+                # Handle args: if they are simple, pass them. If complex, might be tricky.
+                # We assume args are kwargs.
+                args_str = ", ".join([f"{k}={repr(v)}" for k, v in call.args.items()])
+                code = f"result = {call.tool}({args_str})"
+                
+                valid_calls.append(ToolCall(tool="execute_code", args={"code": code}))
             else:
                 # Tool not enabled/found - Feedback to LLM is critical!
                 print(f"[Session] Warning: Tool '{call.tool}' not enabled or unknown.")
@@ -311,8 +375,28 @@ class AssistantSession:
             # Execute tool
             result = tool_registry.execute_tool(call.tool, call.args)
             
-            # Add result to history
-            self.add_message("tool", json.dumps(result), name=call.tool)
+            # Check for Async Agent Start (Direct JSON or Wrapped in dict)
+            agent_signal = None
+            if isinstance(result, str):
+                try: 
+                    agent_signal = json.loads(result)
+                except: pass
+            elif isinstance(result, dict) and "result" in result and isinstance(result["result"], str):
+                try:
+                    agent_signal = json.loads(result["result"])
+                except: pass
+
+            if isinstance(agent_signal, dict) and agent_signal.get("type") == "AGENT_STARTED":
+                self.state = "WAITING_FOR_AGENT"
+                self.add_message("system", f"Agent {agent_signal.get('role')} started in background...")
+                return result
+
+            
+            # Add result to history (Truncate if too large to prevent context overflow)
+            result_str = json.dumps(result)
+            if len(result_str) > 2000:
+                result_str = result_str[:2000] + "... [Truncated]"
+            self.add_message("tool", result_str, name=call.tool)
             
             # Check for scene side-effects immediately
             # This ensures the LLM knows what changed *before* it generates the next step
@@ -321,8 +405,18 @@ class AssistantSession:
                 self.add_message("system", f"SCENE UPDATES: {changes}")
             
             return result
-            
+
         except Exception as e:
             error_msg = f"Error executing {call.tool}: {str(e)}"
             self.add_message("tool", json.dumps({"error": error_msg}), name=call.tool)
             return {"error": error_msg}
+
+    def on_agent_finish(self, result):
+        """Callback from background agent thread."""
+        # Add result to history
+        result_str = json.dumps(result)
+        self.add_message("tool", result_str, name="consult_specialist")
+        
+        # Wake up assistant logic
+        # We set state to EXECUTING so the main loop picks it up and triggers the next LLM step
+        self.state = "EXECUTING"

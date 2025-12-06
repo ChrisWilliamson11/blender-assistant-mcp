@@ -408,76 +408,85 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
         if not texture_maps:
             return {"error": f"No texture maps found for resolution '{resolution}'"}
 
-        # Apply to active object if one exists
-        obj = bpy.context.active_object
-        if obj and obj.type == "MESH":
-            # Create material
-            mat_name = f"{asset_id}_material"
-            mat = bpy.data.materials.get(mat_name)
-            if not mat:
-                mat = bpy.data.materials.new(name=mat_name)
+        # Create material (ALWAYS)
+        mat_name = f"{asset_id}_material"
+        mat = bpy.data.materials.get(mat_name)
+        if not mat:
+            mat = bpy.data.materials.new(name=mat_name)
 
-            mat.use_nodes = True
-            nodes = mat.node_tree.nodes
-            links = mat.node_tree.links
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        links = mat.node_tree.links
+        nodes.clear()
 
-            # Clear existing nodes
-            nodes.clear()
+        # Create Principled BSDF
+        bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
+        bsdf.location = (0, 0)
 
-            # Create Principled BSDF
-            bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
-            bsdf.location = (0, 0)
+        # Create output node
+        output = nodes.new(type="ShaderNodeOutputMaterial")
+        output.location = (300, 0)
 
-            # Create output node
-            output = nodes.new(type="ShaderNodeOutputMaterial")
-            output.location = (300, 0)
+        # Link BSDF to output
+        links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 
-            # Link BSDF to output
-            links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+        y_offset = 300
 
-            y_offset = 300
+        # Helper to load image
+        def load_image_node(path, label, x, y, is_data=True):
+            try:
+                img = bpy.data.images.load(path)
+                node = nodes.new(type="ShaderNodeTexImage")
+                node.image = img
+                node.label = label
+                node.location = (x, y)
+                if is_data:
+                    node.image.colorspace_settings.name = "Non-Color"
+                return node
+            except Exception as e:
+                print(f"Failed to load image {path}: {e}")
+                return None
 
-            # Add texture nodes
-            if "Diffuse" in texture_maps:
-                tex = nodes.new(type="ShaderNodeTexImage")
-                tex.image = bpy.data.images.load(texture_maps["Diffuse"])
-                tex.location = (-300, y_offset)
+        # Add texture nodes
+        if "Diffuse" in texture_maps:
+            tex = load_image_node(texture_maps["Diffuse"], "Diffuse", -300, y_offset, is_data=False)
+            if tex:
                 links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
-                y_offset -= 300
+            y_offset -= 300
 
-            # Handle Roughness (can be standalone or in ARM texture)
-            if "Roughness" in texture_maps:
-                tex = nodes.new(type="ShaderNodeTexImage")
-                tex.image = bpy.data.images.load(texture_maps["Roughness"])
-                tex.image.colorspace_settings.name = "Non-Color"
-                tex.location = (-300, y_offset)
+        # Handle Roughness (can be standalone or in ARM texture)
+        if "Roughness" in texture_maps:
+            tex = load_image_node(texture_maps["Roughness"], "Roughness", -300, y_offset, is_data=True)
+            if tex:
                 links.new(tex.outputs["Color"], bsdf.inputs["Roughness"])
-                y_offset -= 300
-            elif "ARM" in texture_maps:
-                # ARM texture: R=AO, G=Roughness, B=Metalness
-                tex = nodes.new(type="ShaderNodeTexImage")
-                tex.image = bpy.data.images.load(texture_maps["ARM"])
-                tex.image.colorspace_settings.name = "Non-Color"
-                tex.location = (-600, y_offset)
-
+            y_offset -= 300
+        elif "ARM" in texture_maps:
+            # ARM texture: R=AO, G=Roughness, B=Metalness
+            tex = load_image_node(texture_maps["ARM"], "ARM", -600, y_offset, is_data=True)
+            if tex:
                 # Separate RGB to extract channels
-                separate = nodes.new(type="ShaderNodeSeparateRGB")
+                separate = nodes.new(type="ShaderNodeSeparateColor") # Blender 3.3+ uses Separate Color
+                # Fallback for older Blender versions if needed, but 4.0+ uses Separate Color
+                if "Separate Color" not in [n.name for n in bpy.types.ShaderNode.bl_rna.properties['type'].enum_items]:
+                     separate = nodes.new(type="ShaderNodeSeparateRGB")
+                
                 separate.location = (-300, y_offset)
-                links.new(tex.outputs["Color"], separate.inputs["Image"])
+                links.new(tex.outputs["Color"], separate.inputs[0]) # Input is usually index 0 'Image' or 'Color'
 
                 # Green channel = Roughness
-                links.new(separate.outputs["G"], bsdf.inputs["Roughness"])
+                links.new(separate.outputs["Green"], bsdf.inputs["Roughness"])
 
                 # Blue channel = Metalness
-                links.new(separate.outputs["B"], bsdf.inputs["Metallic"])
+                links.new(separate.outputs["Blue"], bsdf.inputs["Metallic"])
 
                 # Red channel = AO (we'll handle this separately if no standalone AO)
                 if "AO" not in texture_maps:
                     # Mix AO (red channel) with base color if we have diffuse
                     if "Diffuse" in texture_maps:
-                        mix = nodes.new(type="ShaderNodeMixRGB")
+                        mix = nodes.new(type="ShaderNodeMix") # Blender 3.4+ uses Mix Node
+                        mix.data_type = 'RGBA'
                         mix.blend_type = "MULTIPLY"
-                        mix.inputs["Fac"].default_value = 1.0
+                        mix.inputs[0].default_value = 1.0 # Factor
                         mix.location = (-150, y_offset + 300)
 
                         # Find existing diffuse connection
@@ -489,106 +498,87 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
                                 break
 
                         if diffuse_source:
-                            links.new(diffuse_source, mix.inputs["Color1"])
-                            links.new(separate.outputs["R"], mix.inputs["Color2"])
-                            links.new(mix.outputs["Color"], bsdf.inputs["Base Color"])
+                            links.new(diffuse_source, mix.inputs[6]) # A
+                            links.new(separate.outputs["Red"], mix.inputs[7]) # B
+                            links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
 
-                y_offset -= 300
+            y_offset -= 300
 
-            # Normal map
-            if "Normal" in texture_maps:
-                tex = nodes.new(type="ShaderNodeTexImage")
-                tex.image = bpy.data.images.load(texture_maps["Normal"])
-                tex.image.colorspace_settings.name = "Non-Color"
-                tex.location = (-600, y_offset)
-
+        # Normal map
+        if "Normal" in texture_maps:
+            tex = load_image_node(texture_maps["Normal"], "Normal", -600, y_offset, is_data=True)
+            if tex:
                 normal_map = nodes.new(type="ShaderNodeNormalMap")
                 normal_map.location = (-300, y_offset)
-
                 links.new(tex.outputs["Color"], normal_map.inputs["Color"])
                 links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
-                y_offset -= 300
+            y_offset -= 300
 
-            # Bump map (alternative to normal map)
-            elif "Bump" in texture_maps:
-                tex = nodes.new(type="ShaderNodeTexImage")
-                tex.image = bpy.data.images.load(texture_maps["Bump"])
-                tex.image.colorspace_settings.name = "Non-Color"
-                tex.location = (-600, y_offset)
-
+        # Bump map (alternative to normal map)
+        elif "Bump" in texture_maps:
+            tex = load_image_node(texture_maps["Bump"], "Bump", -600, y_offset, is_data=True)
+            if tex:
                 bump_node = nodes.new(type="ShaderNodeBump")
                 bump_node.location = (-300, y_offset)
-
                 links.new(tex.outputs["Color"], bump_node.inputs["Height"])
                 links.new(bump_node.outputs["Normal"], bsdf.inputs["Normal"])
-                y_offset -= 300
+            y_offset -= 300
 
-            if "Displacement" in texture_maps:
-                tex = nodes.new(type="ShaderNodeTexImage")
-                tex.image = bpy.data.images.load(texture_maps["Displacement"])
-                tex.image.colorspace_settings.name = "Non-Color"
-                tex.location = (-300, y_offset)
-
+        if "Displacement" in texture_maps:
+            tex = load_image_node(texture_maps["Displacement"], "Displacement", -300, y_offset, is_data=True)
+            if tex:
                 disp = nodes.new(type="ShaderNodeDisplacement")
                 disp.location = (0, -300)
-
                 links.new(tex.outputs["Color"], disp.inputs["Height"])
                 links.new(disp.outputs["Displacement"], output.inputs["Displacement"])
-                y_offset -= 300
+                mat.cycles.displacement_method = "DISPLACEMENT"
+            y_offset -= 300
 
-            # Handle Metalness (standalone only if not in ARM)
-            if "Metalness" in texture_maps and "ARM" not in texture_maps:
-                tex = nodes.new(type="ShaderNodeTexImage")
-                tex.image = bpy.data.images.load(texture_maps["Metalness"])
-                tex.image.colorspace_settings.name = "Non-Color"
-                tex.location = (-300, y_offset)
+        # Handle Metalness (standalone only if not in ARM)
+        if "Metalness" in texture_maps and "ARM" not in texture_maps:
+            tex = load_image_node(texture_maps["Metalness"], "Metalness", -300, y_offset, is_data=True)
+            if tex:
                 links.new(tex.outputs["Color"], bsdf.inputs["Metallic"])
-                y_offset -= 300
+            y_offset -= 300
 
-            # Specular map
-            if "Specular" in texture_maps:
-                tex = nodes.new(type="ShaderNodeTexImage")
-                tex.image = bpy.data.images.load(texture_maps["Specular"])
-                tex.image.colorspace_settings.name = "Non-Color"
-                tex.location = (-300, y_offset)
-                links.new(tex.outputs["Color"], bsdf.inputs["Specular"])
-                y_offset -= 300
+        # Specular map
+        if "Specular" in texture_maps:
+            tex = load_image_node(texture_maps["Specular"], "Specular", -300, y_offset, is_data=True)
+            if tex:
+                # Check for Specular input (Blender 4.0+ vs older)
+                if "Specular IOR Level" in bsdf.inputs:
+                     links.new(tex.outputs["Color"], bsdf.inputs["Specular IOR Level"])
+                elif "Specular" in bsdf.inputs:
+                     links.new(tex.outputs["Color"], bsdf.inputs["Specular"])
+            y_offset -= 300
 
-            if "AO" in texture_maps:
-                # AO needs to be mixed with base color
-                tex = nodes.new(type="ShaderNodeTexImage")
-                tex.image = bpy.data.images.load(texture_maps["AO"])
-                tex.image.colorspace_settings.name = "Non-Color"
-                tex.location = (-600, y_offset)
-
-                # Create MixRGB node to multiply AO with base color
-                mix = nodes.new(type="ShaderNodeMixRGB")
+        if "AO" in texture_maps:
+            # AO needs to be mixed with base color
+            tex = load_image_node(texture_maps["AO"], "AO", -600, y_offset, is_data=True)
+            if tex:
+                # Create Mix Node
+                mix = nodes.new(type="ShaderNodeMix")
+                mix.data_type = 'RGBA'
                 mix.blend_type = "MULTIPLY"
-                mix.inputs["Fac"].default_value = 1.0
+                mix.inputs[0].default_value = 1.0
                 mix.location = (-150, y_offset)
 
-                # If we have a diffuse texture, mix it with AO
-                # Find the link to Base Color (if any) and store the source socket
+                # Find existing diffuse connection
                 diffuse_source = None
-                for link in links:
+                for link in list(links):
                     if link.to_socket == bsdf.inputs["Base Color"]:
                         diffuse_source = link.from_socket
+                        links.remove(link)
                         break
 
-                # Remove the old link if found
                 if diffuse_source:
-                    # Remove by finding it again (safe way)
-                    for link in list(links):  # Create a copy of links to iterate safely
-                        if link.to_socket == bsdf.inputs["Base Color"]:
-                            links.remove(link)
-                            break
-                    # Reconnect through mix node
-                    links.new(diffuse_source, mix.inputs["Color1"])
+                    links.new(diffuse_source, mix.inputs[6]) # A
+                    links.new(tex.outputs["Color"], mix.inputs[7]) # B
+                    links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
 
-                links.new(tex.outputs["Color"], mix.inputs["Color2"])
-                links.new(mix.outputs["Color"], bsdf.inputs["Base Color"])
-
-            # Assign material to object
+        # Apply to active object if one exists
+        obj = bpy.context.active_object
+        if obj and obj.type == "MESH":
             if obj.data.materials:
                 obj.data.materials[0] = mat
             else:
@@ -598,18 +588,21 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
                 "success": True,
                 "texture_maps": texture_maps,
                 "asset_id": asset_id,
-                "resolution": resolution,
-                "applied_to": obj.name,
-                "message": f"✓ Applied {asset_id} to '{obj.name}'. Files saved to: {download_dir}",
+                "material_name": mat_name,
+                "file_path": texture_maps.get("Diffuse") or list(texture_maps.values())[0], # Legacy/Consistency helper
+                "message": f"Downloaded and created material '{mat_name}'. Assigned to active object: {obj.name}"
             }
-        else:
-            return {
-                "success": True,
-                "texture_maps": texture_maps,
-                "asset_id": asset_id,
-                "resolution": resolution,
-                "message": f"Downloaded PBR texture: {asset_id} ({resolution}) to {download_dir}. No active mesh object to apply to.",
-            }
+
+        return {
+            "success": True,
+            "texture_maps": texture_maps,
+            "asset_id": asset_id,
+            "material_name": mat_name,
+            "resolution": resolution,
+            "message": f"Downloaded and created material '{mat_name}'. No active mesh to apply to."
+        }
+
+
 
     except Exception as e:
         return {"error": f"Failed to download texture: {str(e)}"}
@@ -806,6 +799,59 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
         finally:
             # Always end progress bar
             bpy.context.window_manager.progress_end()
+
+        # Handle ZIP files
+        import zipfile
+        
+        # Check if file is a zip (by extension or magic bytes)
+        is_zip = file_path.lower().endswith(".zip")
+        if not is_zip:
+            try:
+                with open(file_path, "rb") as f:
+                    header = f.read(4)
+                    if header == b"PK\x03\x04":
+                        is_zip = True
+            except:
+                pass
+
+        if is_zip:
+            print(f"[PolyHaven] Detected ZIP file. Extracting...")
+            extract_dir = os.path.join(download_dir, "extracted")
+            os.makedirs(extract_dir, exist_ok=True)
+            
+            try:
+                with zipfile.ZipFile(file_path, "r") as zip_ref:
+                    zip_ref.extractall(extract_dir)
+                    
+                # Find the model file in the extracted files
+                found_file = None
+                
+                # Extensions to look for (in order of preference)
+                target_exts = [".blend", ".gltf", ".glb", ".fbx", ".obj"]
+                
+                # Recursive search
+                for root, dirs, files in os.walk(extract_dir):
+                    for ext in target_exts:
+                        for file in files:
+                            if file.lower().endswith(ext):
+                                found_file = os.path.join(root, file)
+                                file_ext = ext.lstrip(".").lower() # Update extension
+                                break
+                        if found_file:
+                            break
+                    if found_file:
+                        break
+                
+                if found_file:
+                    print(f"[PolyHaven] Found model file in ZIP: {found_file}")
+                    file_path = found_file
+                else:
+                    return {"error": f"Could not find a supported model file ({', '.join(target_exts)}) in the downloaded ZIP."}
+                    
+            except zipfile.BadZipFile:
+                return {"error": "Downloaded file appears to be a corrupted ZIP file."}
+            except Exception as e:
+                return {"error": f"Failed to extract ZIP: {str(e)}"}
 
         # Import the model
         imported_objects = []

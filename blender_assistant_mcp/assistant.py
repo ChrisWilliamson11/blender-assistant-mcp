@@ -42,7 +42,7 @@ def get_session(context) -> AssistantSession:
     if session_id not in _sessions:
         prefs = context.preferences.addons[__package__].preferences
         model_name = getattr(prefs, "model_file", "qwen2.5-coder:7b")
-        _sessions[session_id] = AssistantSession(model_name, ToolManager())
+        _sessions[session_id] = AssistantSession(model_name, ToolManager(), llm_client=llama_manager)
         
     return _sessions[session_id]
 
@@ -251,6 +251,56 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             return self._finish(context)
 
         if event.type == 'TIMER':
+            # Service Execution Queue (Main Thread Tasks from Background Agents)
+            # This allows background threads to execute Blender API calls (which must be on Main Thread)
+            if hasattr(session, "execution_queue"):
+                queued_processed = False
+                while not session.execution_queue.empty():
+                    try:
+                        task = session.execution_queue.get_nowait()
+                        func, kwargs, result_container, completion_event = task
+                        try:
+                            # Execute on Main Thread
+                            result_container['result'] = func(**kwargs)
+                        except Exception as e:
+                           result_container['error'] = e
+                        finally:
+                            # Notify waiting thread
+                            completion_event.set()
+                            session.execution_queue.task_done()
+                            queued_processed = True
+                    except:
+                        break
+                
+                if queued_processed:
+                    # Sync Python session history to Blender UI Collection
+                    # This ensures messages added by Agents (via session.add_message) appear in the UI
+                    try:
+                        wm = context.window_manager
+                        if wm.assistant_chat_sessions and 0 <= wm.assistant_active_chat_index < len(wm.assistant_chat_sessions):
+                            session_ui = wm.assistant_chat_sessions[wm.assistant_active_chat_index]
+                            
+                            # Simple sync: append new messages
+                            # Assuming session.history only grows
+                            hist_len = len(session.history)
+                            ui_len = len(session_ui.messages)
+                            
+                            if hist_len > ui_len:
+                                for i in range(ui_len, hist_len):
+                                    msg_data = session.history[i]
+                                    new_msg = session_ui.messages.add()
+                                    new_msg.role = msg_data.get("role", "System")
+                                    new_msg.content = msg_data.get("content", "")
+                                    # Handle tool info if present (stored in content usually or ignored by simple UI)
+                                    # UI renderer parses content.
+                    except Exception as e:
+                        print(f"Failed to sync history to UI: {e}")
+
+                    # Force UI redraw so Agent messages appear immediately
+                    for region in context.area.regions:
+                        if region.type == 'WINDOW':
+                            region.tag_redraw()
+
             if session.state == "THINKING":
                 if not self._thread.is_alive():
                     # Request done
@@ -277,9 +327,49 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                             # Immediate execution of first tool?
                             # Let's wait for next timer tick to keep UI responsive
                         else:
-                            # No tools, we are done
+                            # No tools, we are done?
                             if not content:
-                                self._add_message("System", "Task Completed.")
+                                if thinking:
+                                    # Model thought but didn't act or speak.
+                                    # This is a "stalled" state.
+                                    # We should consult the COMPLETION agent to see if we are actually done.
+                                    self._add_message("System", "Verifying completion...")
+                                    
+                                    # Consult COMPLETION agent
+                                    # We need to run this in a thread or just queue it?
+                                    # Since we are in the timer, we can't block.
+                                    # But consult_specialist is synchronous (calls LLM).
+                                    # We should probably queue a "forced" tool call to consult_specialist.
+                                    
+                                    # Better approach: Inject a system message and restart step
+                                    # asking the model to either act or confirm completion.
+                                    # OR, we can just assume it's NOT done and ask it to continue.
+                                    
+                                    # Let's try to use the COMPLETION agent as intended.
+                                    # We'll inject a tool call to `consult_specialist` into the queue manually.
+                                    from .core import ToolCall
+                                    
+                                    # Get original user request
+                                    user_request = "Unknown request"
+                                    # Find the last message from the user
+                                    for msg in reversed(session.history):
+                                        if msg.get("role") == "user":
+                                            user_request = msg.get("content", "Unknown request")
+                                            break
+                                    
+                                    comp_call = ToolCall(
+                                        tool="consult_specialist",
+                                        args={
+                                            "role": "COMPLETION",
+                                            "query": f"The assistant stopped without action. The user's original request was: '{user_request}'. Check if this request is fully satisfied."
+                                        }
+                                    )
+                                    session.tool_queue = [comp_call]
+                                    session.state = "EXECUTING"
+                                    # Return to let timer pick up EXECUTING state
+                                    return {"PASS_THROUGH"}
+                                else:
+                                    self._add_message("System", "Task Completed.")
                             return self._finish(context)
                     else:
                         self._add_message("Error", "No response from model")
@@ -289,6 +379,10 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                 if session.tool_queue:
                     # Execute one tool
                     result = session.execute_next_tool()
+                    
+                    # If tool switched us to WAITING state (Async Agent), stop here.
+                    if session.state == "WAITING_FOR_AGENT":
+                        return {"PASS_THROUGH"}
                     
                     # Show result
                     last_msg = session.history[-1]
@@ -301,12 +395,18 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                         self._start_step(context, session)
                 else:
                     # Queue empty (shouldn't happen in EXECUTING state unless transitioned)
-                    session.state = "IDLE"
-                    
-                    # Update scene watcher baseline so we don't report our own changes as user changes next time
-                    session.scene_watcher.capture_state()
-                    
-                    return self._finish(context)
+                    # Check if we woke up from an Async Agent with a result
+                    last_msg_role = session.history[-1].get("role") if session.history else ""
+                    if last_msg_role == "tool":
+                        # We have new results from an agent. Continue thinking.
+                        self._start_step(context, session)
+                    else:
+                        session.state = "IDLE"
+                        
+                        # Update scene watcher baseline so we don't report our own changes as user changes next time
+                        session.scene_watcher.capture_state()
+                        
+                        return self._finish(context)
 
         return {"PASS_THROUGH"}
 
