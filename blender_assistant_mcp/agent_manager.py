@@ -345,12 +345,19 @@ class AgentTools:
         # Inject tool definitions into system prompt for robustness
         tools_text = json.dumps(tool_schemas, indent=2)
         
+        # Inject SDK Discovery Hints (for tools NOT enabled natively)
+        sdk_hints = self.tool_manager.get_system_prompt_hints(
+            enabled_tools=injected_tools, 
+            allowed_tools=universe
+        )
+        
         system_prompt = (
             f"You are the {agent.name}.\n"
             f"{agent.system_prompt}\n\n"
             f"{context_prompt}\n"
             f"{initial_context}\n\n"
-            f"AVAILABLE TOOLS:\n{tools_text}\n\n"
+            f"AVAILABLE TOOLS (Native):\n{tools_text}\n\n"
+            f"{sdk_hints}\n\n"
             "Your goal is to solve the user's query efficiently. "
             "Use your tools."
         )

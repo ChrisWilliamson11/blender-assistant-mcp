@@ -119,6 +119,55 @@ def main():
     print("-" * 40)
     
     print("\nDone! This is exactly what the LLM receives.")
+    
+    # 5. Debug Worker Agent Prompts (Task & Completion)
+    print("\n[5] Worker Agent Prompts (Simulated)")
+    
+    agent_tools = session.agent_tools
+    
+    for role in ["TASK_AGENT", "COMPLETION"]:
+        print("\n" + "="*40)
+        print(f"AGENT: {role}")
+        print("="*40)
+        
+        agent = agent_tools.agents[role]
+        
+        # Simulate logic from consult_specialist
+        universe = tool_manager.get_enabled_tools_for_role(role)
+        # Mock active prefs (default tools)
+        active_mcp_set = tool_manager.get_enabled_tools(None) 
+        core_tools = {"execute_code", "assistant_help"}
+        
+        # Native Tools (Intersection)
+        injected_tools = universe.intersection(active_mcp_set.union(core_tools))
+        
+        # SDK Hints (The rest)
+        sdk_hints = tool_manager.get_system_prompt_hints(
+            enabled_tools=injected_tools,
+            allowed_tools=universe
+        )
+        
+        # Schemas
+        from blender_assistant_mcp.tools import tool_registry
+        schemas = []
+        for t in injected_tools:
+            s = tool_registry.get_tool_schema(t)
+            if s: schemas.append(s)
+            
+        tools_text = json.dumps(schemas, indent=2)
+        
+        simulated_prompt = (
+            f"You are the {agent.name}.\n"
+            f"{agent.system_prompt}\n\n"
+            "(CONTEXT WOULD GO HERE)\n\n"
+            f"AVAILABLE TOOLS (Native):\n{tools_text}\n\n"
+            f"{sdk_hints}\n\n"
+            "Your goal is to solve the user's query efficiently. "
+            "Use your tools."
+        )
+        
+        print(simulated_prompt)
+        print("-" * 40)
 
 if __name__ == "__main__":
     main()

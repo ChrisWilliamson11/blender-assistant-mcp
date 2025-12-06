@@ -19,18 +19,16 @@ class ToolManager:
         
         # Default tools enabled if no preferences are found (first run)
         self.default_tools: Set[str] = {
-            "execute_code",
-            "assistant_help",
-            "get_scene_info",
             "get_object_info",
-            "search_memory",
+            "get_scene_info",
+            "inspect_data",
+            "search_data",
+            "task_add",
+            "task_clear",
+            "task_complete",
+            "task_list",
+            "task_update",
             "capture_viewport_for_vision",
-            "rag_query",
-            "web_search",
-            "fetch_webpage",
-            "search_polyhaven_assets",
-            "get_polyhaven_asset_info",
-            "download_polyhaven",
         }
 
     def get_enabled_tools(self, preferences=None) -> Set[str]:
