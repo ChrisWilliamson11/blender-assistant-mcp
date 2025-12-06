@@ -361,6 +361,10 @@ class AgentTools:
             "Your goal is to solve the user's query efficiently. "
             "Use your tools."
         )
+
+        # Debug: Print system prompt if enabled
+        if prefs and getattr(prefs, "debug_mode", False):
+            print(f"\n[AgentTools] [AGENT: {agent.name}] System Prompt:\n{'-'*40}\n{system_prompt}\n{'-'*40}\n")
         
         messages = [
             {"role": "system", "content": system_prompt},
