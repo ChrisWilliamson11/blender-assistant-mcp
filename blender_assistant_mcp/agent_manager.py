@@ -65,7 +65,12 @@ class AgentTools:
                 2. PLAN: If complex, break down into steps.
                 3. EXECUTE: Use tools to achieve the goal.
                 4. VERIFY: Check if your actions worked.
-                5. REPORT: Return `expected_changes` JSON summary when done."""
+                5. REPORT: Return `expected_changes` JSON summary when done.
+                
+                CRITICAL RULES:
+                - If a tool fails (e.g., arguments mismatch), YOU MUST use `assistant_help` to check the tool signature immediately. DO NOT GUESS AGAIN.
+                - For PolyHaven/Sketchfab: Use `get_polyhaven_asset_info` (or equivalent) to check availability (resolutions/formats) BEFORE downloading.
+                - If stuck, think step-by-step why it failed."""
             ),
             "COMPLETION": Agent(
                 name="COMPLETION",

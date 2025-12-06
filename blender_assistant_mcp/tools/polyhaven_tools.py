@@ -983,6 +983,23 @@ def register():
         category="PolyHaven",
     )
 
+    tool_registry.register_tool(
+        "get_polyhaven_asset_info",
+        get_polyhaven_asset_info,
+        "Get detailed info about a PolyHaven asset (including available resolutions).",
+        {
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string",
+                    "description": "The asset ID",
+                },
+            },
+            "required": ["asset_id"],
+        },
+        category="PolyHaven",
+    )
+
     # Consolidated download tool
 
     tool_registry.register_tool(
