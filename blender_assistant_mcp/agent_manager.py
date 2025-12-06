@@ -72,8 +72,8 @@ class AgentTools:
                 - For PolyHaven/Sketchfab: Use `get_polyhaven_asset_info` (or equivalent) to check availability (resolutions/formats) BEFORE downloading.
                 - If stuck, think step-by-step why it failed."""
             ),
-            "COMPLETION": Agent(
-                name="COMPLETION",
+            "COMPLETION_AGENT": Agent(
+                name="COMPLETION_AGENT",
                 description="Specializes in verifying if the user's request is fully satisfied.",
                 system_prompt="""You are the Completion Agent. Your ONLY job is to check if the user's original request has been fully completed.
                 
@@ -290,18 +290,21 @@ class AgentTools:
         # Build Context (User Requirement)
         initial_context = ""
         if self.session and len(self.session.history) > 0:
-            initial_context = f"\n\n[Context] Original User Request: {self.session.history[0].get('content', '')}"
+            # Find the first user message
+            first_user_msg = next((m["content"] for m in self.session.history if m["role"] == "user"), "")
+            initial_context = f"\n\n[OVERALL GOAL (NORTH STAR)]: {first_user_msg}"
         
         context_prompt = self.context_manager.get_context_prompt(role, focus_object)
         
         tool_schemas = []
+        sdk_hints = ""
 
         if self.tool_manager:
             from .tools import tool_registry
             import bpy
 
             # 1. Determine Agent Universe
-            universe = self.tool_manager.get_enabled_tools_for_role(role)
+            universe = self.tool_manager.get_allowed_tools_for_role(role)
             
             # 2. Determine User Preferences (MCP Active Tools)
             prefs = None
@@ -317,10 +320,8 @@ class AgentTools:
             core_tools = {"execute_code", "assistant_help"}
             injected_tools = universe.intersection(active_mcp_set.union(core_tools))
             
-            for t_name in injected_tools:
-                s = tool_registry.get_tool_schema(t_name)
-                if s:
-                    tool_schemas.append(s)
+            # 4. Generate Tool Schemas
+            tool_schemas = self.tool_manager.get_openai_tools(injected_tools)
 
             # Inject 'finish_task'
             tool_schemas.append({
@@ -341,21 +342,25 @@ class AgentTools:
                     }
                 }
             })
+            
+            # 5. Generate SDK Hints (For Allowed but Disabled Tools)
+            sdk_hints = self.tool_manager.get_system_prompt_hints(
+                enabled_tools=injected_tools, 
+                allowed_tools=universe
+            )
+            
+            # 6. Get Common Behavior
+            behavior_prompt = self.tool_manager.get_common_behavior_prompt()
 
         # Inject tool definitions into system prompt for robustness
         tools_text = json.dumps(tool_schemas, indent=2)
-        
-        # Inject SDK Discovery Hints (for tools NOT enabled natively)
-        sdk_hints = self.tool_manager.get_system_prompt_hints(
-            enabled_tools=injected_tools, 
-            allowed_tools=universe
-        )
         
         system_prompt = (
             f"You are the {agent.name}.\n"
             f"{agent.system_prompt}\n\n"
             f"{context_prompt}\n"
             f"{initial_context}\n\n"
+            f"{behavior_prompt}\n\n"
             f"AVAILABLE TOOLS (Native):\n{tools_text}\n\n"
             f"{sdk_hints}\n\n"
             "Your goal is to solve the user's query efficiently. "

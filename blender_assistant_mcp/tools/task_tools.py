@@ -38,6 +38,15 @@ def task_add(description: str) -> Dict[str, Any]:
     if tasks is None:
          return {"success": False, "error": "No active chat session found."}
 
+    # distinct active tasks check
+    for t in tasks:
+        if t.name == description and t.status == "TODO":
+            return {
+                "success": False, 
+                "message": f"Task '{description}' already exists (Status: TODO). skipping.",
+                "task_index": -1
+            }
+
     item = tasks.add()
     item.name = description
     item.status = "TODO"

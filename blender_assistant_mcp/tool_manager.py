@@ -129,21 +129,24 @@ class ToolManager:
             
         return "\n".join(lines)
 
-    def get_enabled_tools_for_role(self, role: str) -> Set[str]:
-        """Get the specific set of tools allowed for a given agent role."""
+    def get_allowed_tools_for_role(self, role: str) -> Set[str]:
+        """Get the 'Universe' of tools allowed for a role (ignoring preferences)."""
+        base_set = {"execute_code", "assistant_help"} # Always allowed
+
         if role == "MANAGER":
-            return {
-                "get_object_info", "get_scene_info", "inspect_data", "search_data",
+            return base_set.union({
+                # System / Memory / Task
                 "remember_fact", "remember_learning", "remember_preference",
                 "task_add", "task_clear", "task_list", "task_update", "task_complete",
                 "consult_specialist",
-                "get_active", "get_selection", "capture_viewport_for_vision"
-            }
+                # Inspection / Vision
+                "get_object_info", "get_scene_info", "inspect_data", "search_data",
+                "capture_viewport_for_vision"
+            })
+        
         elif role == "TASK_AGENT":
-            return {
-                # Core
-                "execute_code", "assistant_help",
-                # Blender
+            return base_set.union({
+                 # Blender
                 "create_collection", "delete_collection", "get_collection_info", 
                 "list_collections", "move_to_collection", "set_collection_color",
                 "get_object_info", "get_scene_info", "inspect_data", "search_data",
@@ -159,16 +162,53 @@ class ToolManager:
                 # Sketchfab/Stock (if available)
                 "sketchfab_download", "sketchfab_login", "sketchfab_search",
                 "check_stock_photo_download", "download_stock_photo", "search_stock_photos"
-            }
-        elif role == "COMPLETION":
-            return {
-                "get_scene_info", "get_object_info", "inspect_data", "search_data", 
-                "list_collections", "task_list",
-                "get_active", "get_selection"
-            }
-        else:
-            return set()
+            })
+
+        elif role == "COMPLETION_AGENT":
+            return base_set.union({
+                 "get_scene_info", "get_object_info", "inspect_data", "search_data", 
+                 "list_collections", "task_list",
+                 "get_active", "get_selection"
+            })
+            
+        return set()
+
+    def get_enabled_tools_for_role(self, role: str, preferences=None) -> Set[str]:
+        """Get the specific set of tools enabled for a role (intersected with preferences)."""
+        allowed = self.get_allowed_tools_for_role(role)
+        
+        # Start with core tools (ALWAYS ENABLED)
+        enabled = {"execute_code", "assistant_help"}
+        
+        # If we don't have prefs, usually implies "Show Everything" (or default behavior)
+        # But per user request: "Enabled = MCP, Disabled = SDK". 
+        # If prefs is none, we default to ALL Allowed tools being MCP enabled.
+        if not getattr(preferences, "tool_config_items", None):
+            return allowed
+            
+        # Filter by user preferences
+        pref_enabled = {t.name for t in preferences.tool_config_items if t.enabled}
+        
+        for tool in allowed:
+            if tool in pref_enabled:
+                enabled.add(tool)
+        
+        return enabled
 
     def get_compact_tool_list(self, enabled_tools: Set[str]) -> str:
         """Get a compact string representation of enabled tools for the system prompt."""
         return tool_registry.get_tools_schema(enabled_tools=sorted(list(enabled_tools)))
+
+    def get_common_behavior_prompt(self) -> str:
+        """Get the standardized BEHAVIOR section for all agents."""
+        return """BEHAVIOR
+- **PLAN FIRST**: If a request is complex, briefly plan before executing.
+- **ACCESS METHODS**: You have two ways to act:
+  1. **Native Tools**: Call these directly (e.g., `get_scene_info`).
+  2. **Python Code**: Use `execute_code` to run scripts. Use this for `assistant_sdk.*` methods and raw `bpy` commands.
+- **FINDING TOOLS**: Do not guess tool names. Use `assistant_help` to find SDK methods, `rag_query` for docs, or `search_memory` for past solutions.
+- **SCENE AWARENESS**: 'SCENE UPDATES' provide a SUMMARY of changes (added/modified objects). Use `inspect_data` or `get_scene_info(detailed=True)` to fetch detailed properties (like vertices, modifiers, or custom props) if needed.
+- **CLEANUP**: Keep the scene organized. Use collections to group new objects.
+- **VERIFY**: Always verify your actions.
+- **TEST OVER GUESS**: If unsure about API behavior, write a small test script using `execute_code` instead of speculating.
+- **LEARN**: Use `remember_learning` to record pitfalls or version quirks."""

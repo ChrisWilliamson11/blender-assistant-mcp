@@ -212,8 +212,8 @@ class AssistantSession:
                 "properties": {
                     "role": {
                         "type": "string",
-                        "description": "Agent role (TASK_AGENT, COMPLETION)",
-                        "enum": ["TASK_AGENT", "COMPLETION"]
+                        "description": "Agent role (TASK_AGENT, COMPLETION_AGENT)",
+                        "enum": ["TASK_AGENT", "COMPLETION_AGENT"]
                     },
                     "query": {
                         "type": "string",
@@ -224,8 +224,6 @@ class AssistantSession:
             },
             category="System"
         )
-
-
 
     def add_message(self, role: str, content: str, name: str = None, images: List[str] = None):
         """Add a message to history."""
@@ -243,7 +241,14 @@ class AssistantSession:
     def get_system_prompt(self) -> str:
         """Build the system prompt based on enabled tools."""
         mcp_tools = self.tool_manager.get_compact_tool_list(self.enabled_tools)
-        sdk_tools = self.tool_manager.get_system_prompt_hints(self.enabled_tools)
+        
+        # Get Allowed tools (Universe) to filter hints correctly
+        allowed_tools = self.tool_manager.get_allowed_tools_for_role("MANAGER")
+        
+        # Generate hints for disabled tools (SDK Mode support)
+        # Sdk Hints = Allowed - Enabled
+        sdk_hints = self.tool_manager.get_system_prompt_hints(self.enabled_tools, allowed_tools=allowed_tools)
+        
         memory_context = self.memory_manager.get_context()
         if not memory_context:
             memory_context = "(No memories yet)"
@@ -253,35 +258,40 @@ class AssistantSession:
         scene_context = ""
         if scene_changes:
             scene_context = f"SCENE UPDATES (Since last turn)\n{scene_changes}\n\n"
-            
-        return (
-            "You are the Blender Assistant MANAGER. You CANNOT execute code or modify the scene directly.\n"
-            "**YOUR GOAL**: Plan and EXECUTE the task by delegating to the `TASK_AGENT`.\n"
-            "**CRITICAL**: Do NOT write a text plan. You must ACT using tools immediately.\n"
-            "**WORKFLOW**:\n"
-            "1.  Call `task_add` to log the first step.\n"
-            "2.  IMMEDIATELY call `consult_specialist(role='TASK_AGENT', query='...')` to execute it.\n"
-            "3.  Wait for the result, then call `task_complete`.\n"
-            "4.  Repeat for the next step.\n"
-            "5.  Use `remember_*` only for critical facts.\n\n"
-            "**CRITICAL RULES**:\n"
-            "- **NO CODE EXECUTION**: You have NO execute_code tool. Delegate ALL coding/blender work to `TASK_AGENT`.\n"
-            "- **NO PLAN LISTS**: Do not output markdown checklists. Call `task_add` instead.\n"
-            "- **USE TOOLS**: If you need to check something, delegate to `TASK_AGENT` or `COMPLETION`.\n"
-            "- **VERIFY**: Use `consult_specialist(role='COMPLETION', ...)` before finishing complex tasks.\n\n"
-            "CHAT PARTICIPANTS\n"
-            "- **User**: The human manager.\n"
-            "- **Manager (You)**: The planner. NO CODE EXECUTION.\n"
-            "- **Task Agent**: The worker who executes code/tools.\n"
-            "- **Completion Agent**: Verifier.\n\n"
-            f"{scene_context}"
-            "MEMORY\n"
-            f"{memory_context}\n\n"
-            "TOOLS (Manager Only)\n"
-            f"{mcp_tools}\n"
-            "PROTOCOL & BEHAVIORAL RULES\n" 
-            f"{self._load_protocol()}"
-        )
+
+
+        return f"""You are the Manager Agent (The "Brain").
+GOAL: Plan, delegate, and track complex Blender tasks.
+CONTEXT:
+- Memory: {memory_context}
+- Scene Changes: {scene_changes}
+
+{self.tool_manager.get_common_behavior_prompt()}
+
+TOOLS
+{mcp_tools}
+
+{sdk_hints}
+
+RULES:
+1. Use `consult_specialist(role="TASK_AGENT", ...)` for ALL Blender work other than the absolute simplest
+2. You MAY use `execute_code` to call `assistant_sdk` methods (e.g., `assistant_sdk.task.add(...)`) if the native tool is unavailable.
+3. Verify work using `consult_specialist(role="COMPLETION_AGENT", ...)` before marking tasks DONE.
+4. Keep `task_list` updated.
+5. If the user asks for a simple quick action, you may still delegate it to TASK_AGENT.
+
+CHAT PARTICIPANTS
+- **User**: The human manager.
+- **Manager (You)**: The planner.
+- **Task Agent**: The worker who executes code/tools.
+- **Completion Agent**: Verifier.
+
+{scene_context}
+MEMORY
+{memory_context}
+
+PROTOCOL & BEHAVIORAL RULES
+{self._load_protocol()}"""
 
     def _load_protocol(self) -> str:
         """Load the agentic protocol from protocol.md."""

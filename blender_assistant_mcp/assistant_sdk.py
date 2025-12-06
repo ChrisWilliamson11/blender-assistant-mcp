@@ -46,7 +46,14 @@ class _Namespace:
                         raise TypeError(f"{tool_name}() got multiple values for argument '{param_name}'")
                     kwargs[param_name] = arg
             
-            return tool_registry.execute_tool(tool_name, kwargs)
+            result = tool_registry.execute_tool(tool_name, kwargs)
+            
+            # CRITICAL FIX: If tool returned an error, RAISE it so execute_code catches it.
+            # Otherwise, the agent thinks it succeeded because it got a dict back.
+            if isinstance(result, dict) and 'error' in result:
+                raise RuntimeError(f"Tool {tool_name} failed: {result['error']}")
+                
+            return result
         
         # Set docstring from tool description
         tool_method.__doc__ = tool.get('description', f'{tool_name} tool')

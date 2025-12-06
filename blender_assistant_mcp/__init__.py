@@ -33,6 +33,7 @@ from .tools import (
     web_tools,
     memory_tools,
     task_tools,
+    core_tools,
 
 )
 from . import (
@@ -55,6 +56,7 @@ _modules = [
     web_tools,
     memory_tools,
     task_tools,
+    core_tools,
 
     assistant,
 ]

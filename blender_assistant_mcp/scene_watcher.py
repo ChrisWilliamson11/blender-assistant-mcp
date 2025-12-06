@@ -6,6 +6,7 @@ class SceneWatcher:
 
     def __init__(self):
         self.last_objects: Set[str] = set()
+        self.last_materials: Set[str] = set()
         self.last_selection: Set[str] = set()
         self.last_active: Optional[str] = None
         self.last_mode: str = "OBJECT"
@@ -19,6 +20,7 @@ class SceneWatcher:
         # Capture objects (names)
         # We use names as unique IDs for simplicity, though UUIDs would be better if Blender had them natively exposed easily
         self.last_objects = {obj.name for obj in bpy.data.objects}
+        self.last_materials = {mat.name for mat in bpy.data.materials}
         
         # Capture selection
         self.last_selection = {obj.name for obj in bpy.context.selected_objects}
@@ -66,6 +68,12 @@ class SceneWatcher:
 
         if removed_names:
             changes["removed"] = list(removed_names)
+
+        # 1b. Material Additions
+        current_materials = {mat.name for mat in bpy.data.materials}
+        added_materials = current_materials - self.last_materials
+        if added_materials:
+            changes["materials_added"] = list(added_materials)
 
         # 2. Selection Changes
         newly_selected = current_selection - self.last_selection
