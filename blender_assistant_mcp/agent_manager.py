@@ -86,7 +86,10 @@ class AgentTools:
                 - If complete: Return `{"thought": "Task is complete because...", "expected_changes": {"status": "COMPLETE"}}`
                 - If incomplete: Return `{"thought": "Task is incomplete because...", "expected_changes": {"status": "INCOMPLETE", "missing": ["..."]}}`
                 
-                Do NOT execute code unless you need to inspect the scene further."""
+                CRITICAL RULES:
+                - Output VALID JSON only.
+                - Verify efficiently using `get_scene_info` or `execute_code` (for complex checks).
+                - If a tool fails, check usage with `assistant_help`."""
             )
         }
         
@@ -339,11 +342,15 @@ class AgentTools:
                 }
             })
 
+        # Inject tool definitions into system prompt for robustness
+        tools_text = json.dumps(tool_schemas, indent=2)
+        
         system_prompt = (
             f"You are the {agent.name}.\n"
             f"{agent.system_prompt}\n\n"
             f"{context_prompt}\n"
             f"{initial_context}\n\n"
+            f"AVAILABLE TOOLS:\n{tools_text}\n\n"
             "Your goal is to solve the user's query efficiently. "
             "Use your tools."
         )
