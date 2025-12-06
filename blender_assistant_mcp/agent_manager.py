@@ -87,6 +87,10 @@ class AgentTools:
         
     def execute_in_main_thread(self, func, *args, **kwargs):
         """Execute a function on the main thread via the session queue."""
+        # Check if we are already on the main thread to avoid deadlock
+        if threading.current_thread() is threading.main_thread():
+             return func(*args, **kwargs)
+
         if not self.execution_queue:
             return func(*args, **kwargs)
             
