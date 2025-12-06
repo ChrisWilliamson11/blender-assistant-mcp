@@ -28,6 +28,9 @@ class ToolManager:
             "rag_query",
             "web_search",
             "fetch_webpage",
+            "search_polyhaven_assets",
+            "get_polyhaven_asset_info",
+            "download_polyhaven",
         }
 
     def get_enabled_tools(self, preferences=None) -> Set[str]:
@@ -148,7 +151,7 @@ class ToolManager:
                 "get_object_info", "get_scene_info", "inspect_data", "search_data",
                 "get_active", "get_selection", "select_by_type", "set_active", "set_selection",
                 # Polyhaven
-                "download_polyhaven", "search_polyhaven_assets",
+                "download_polyhaven", "search_polyhaven_assets", "get_polyhaven_asset_info",
                 # Web/RAG
                 "web_search", "fetch_webpage", "search_image_url", "search_wikimedia_image", 
                 "extract_image_urls_from_webpage", "download_image_as_texture", 
