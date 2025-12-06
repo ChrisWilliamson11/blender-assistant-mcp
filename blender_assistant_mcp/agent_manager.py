@@ -123,7 +123,7 @@ class AgentTools:
         
         while True:
             turn_count += 1
-            if turn_count > 11:
+            if turn_count > 50:
                 print(f"[AgentTools] [AGENT: {role}] Turn limit exceeded ({turn_count}).")
                 if self.message_callback:
                     self.execute_in_main_thread(self.message_callback, "system", f"Agent {role} turn limit exceeded.")

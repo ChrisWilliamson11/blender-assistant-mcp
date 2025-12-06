@@ -108,14 +108,15 @@ def task_list() -> Dict[str, Any]:
         
     return {"tasks": output_tasks}
 
-def task_clear() -> Dict[str, Any]:
+def task_clear(reason: str = "") -> Dict[str, Any]:
     """Clear all tasks from the plan."""
     tasks = _get_active_task_list()
     if tasks is None:
          return {"success": False, "error": "No active chat session found."}
     
     tasks.clear()
-    return {"success": True, "message": "Task list cleared."}
+    msg = f"Task list cleared. Reason: {reason}" if reason else "Task list cleared."
+    return {"success": True, "message": msg}
 
 # -----------------------------------------------------------------------------
 # Registration
@@ -191,7 +192,9 @@ def register():
         "Clear the task list.",
         {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "reason": {"type": "string", "description": "Reason for clearing tasks"}
+            },
             "required": []
         },
         category="Planning"
