@@ -96,39 +96,6 @@ class MarkdownRenderer:
                 i += 1
                 continue
 
-            # Paragraphs
-            # Group consecutive text lines until a block starter is found
-            paragraph_lines = [line]
-            j = i + 1
-            while j < len(lines):
-                next_line = lines[j]
-                next_stripped = next_line.strip()
-                
-                # Check for block starters
-                is_block_start = (
-                    next_stripped.startswith("```") or
-                    (next_stripped.startswith("#") and " " in next_stripped) or
-                    next_stripped.startswith("- ") or
-                    next_stripped.startswith("* ") or
-                    (len(next_stripped) >= 3 and next_stripped[0].isdigit() and next_stripped[1] == "." and next_stripped[2] == " ") or
-                    next_stripped.startswith("> ")
-                )
-                
-                if is_block_start:
-                    break
-                    
-                paragraph_lines.append(next_line)
-                j += 1
-            
-            # Render the gathered paragraph
-            full_para = "\n".join(paragraph_lines)
-            if full_para.strip():
-                 MarkdownRenderer.render_paragraph(layout, full_para)
-            else:
-                 # It's an empty line/spacer
-                 if len(paragraph_lines) > 0 and not any(p.strip() for p in paragraph_lines):
-                     # Just vertical space if needed, or ignore
-                     pass
             # <details> / <summary> Handling
             if stripped.startswith("<details>"):
                 # Start details block
@@ -154,6 +121,45 @@ class MarkdownRenderer:
                      details_lines.append(line)
                 i += 1
                 continue
+
+            # Paragraphs
+            # Group consecutive text lines until a block starter is found
+            paragraph_lines = [line]
+            j = i + 1
+            while j < len(lines):
+                next_line = lines[j]
+                next_stripped = next_line.strip()
+                
+                # Check for block starters
+                is_block_start = (
+                    next_stripped.startswith("```") or
+                    (next_stripped.startswith("#") and " " in next_stripped) or
+                    next_stripped.startswith("- ") or
+                    next_stripped.startswith("* ") or
+                    (len(next_stripped) >= 3 and next_stripped[0].isdigit() and next_stripped[1] == "." and next_stripped[2] == " ") or
+                    next_stripped.startswith("> ") or
+                    next_stripped.startswith("<details>") or 
+                    next_stripped.startswith("</details>")
+                )
+                
+                if is_block_start:
+                    break
+                    
+                paragraph_lines.append(next_line)
+                j += 1
+            
+            # Render the gathered paragraph
+            full_para = "\n".join(paragraph_lines)
+            if full_para.strip():
+                 MarkdownRenderer.render_paragraph(layout, full_para)
+            else:
+                 # It's an empty line/spacer
+                 if len(paragraph_lines) > 0 and not any(p.strip() for p in paragraph_lines):
+                     # Just vertical space if needed, or ignore
+                     pass
+            
+            i = j
+            continue
 
             # Handle unclosed code block
             if in_code_block and code_block_lines:
