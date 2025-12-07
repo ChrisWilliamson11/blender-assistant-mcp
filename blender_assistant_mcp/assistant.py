@@ -11,48 +11,11 @@ from .tools import tool_registry
 from .core import AssistantSession
 from .tool_manager import ToolManager
 from . import ollama_adapter as llama_manager
+from . import session_manager
+from .session_manager import get_session
 
-# Global session state
-_sessions: dict[str, AssistantSession] = {}
+# Global session state delegated to session_manager
 _stop_requested = False
-
-def get_session(context) -> AssistantSession:
-    """Get or create the assistant session for the active chat tab."""
-    global _sessions
-    
-    wm = context.window_manager
-    idx = wm.assistant_active_chat_index
-    
-    # Ensure index is valid
-    if idx < 0 or idx >= len(wm.assistant_chat_sessions):
-        # Fallback if no sessions exist (shouldn't happen in modal but safe to handle)
-        if not wm.assistant_chat_sessions:
-            return None
-        idx = 0
-        
-    session_ui = wm.assistant_chat_sessions[idx]
-    session_id = session_ui.session_id
-    
-    # If session_id is empty (legacy/bug), generate one
-    if not session_id:
-        import uuid
-        session_id = str(uuid.uuid4())
-        session_ui.session_id = session_id
-        
-    if session_id not in _sessions:
-        prefs = context.preferences.addons[__package__].preferences
-        model_name = getattr(prefs, "model_file", "qwen2.5-coder:7b")
-        _sessions[session_id] = AssistantSession(model_name, ToolManager(), llm_client=llama_manager)
-        
-    return _sessions[session_id]
-
-
-
-def reset_session(session_id: str):
-    """Reset a specific session (e.g. on new chat or delete)."""
-    global _sessions
-    if session_id in _sessions:
-        del _sessions[session_id]
 
 class ASSISTANT_OT_stop(bpy.types.Operator):
     """Stop the current assistant operation"""
@@ -220,7 +183,9 @@ class ASSISTANT_OT_send(bpy.types.Operator):
     def _start_step(self, context, session):
         """Start an LLM request."""
         prefs = context.preferences.addons[__package__].preferences
-        model_name = getattr(prefs, "model_file", "qwen2.5-coder:7b")
+        model_name = getattr(prefs, "model_file", "gpt-oss:20b")
+        if model_name == "NONE":
+            model_name = "gpt-oss:20b"
         debug_mode = getattr(prefs, "debug_mode", False)
         
         
@@ -359,7 +324,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                                     # OR, we can just assume it's NOT done and ask it to continue.
                                     
                                     # Let's try to use the COMPLETION agent as intended.
-                                    # We'll inject a tool call to `consult_specialist` into the queue manually.
+                                    # We'll inject a tool call to `spawn_agent` into the queue manually.
                                     from .core import ToolCall
                                     
                                     # Get original user request
@@ -370,6 +335,14 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                                             user_request = msg.get("content", "Unknown request")
                                             break
                                     
+                                    comp_call = ToolCall(
+                                        tool="spawn_agent",
+                                        args={
+                                            "role": "COMPLETION_AGENT",
+                                            "query": f"Verify if this request is satisfied: {user_request}"
+                                        }
+                                    )
+
                                     session.tool_queue = [comp_call]
                                     session.state = "EXECUTING"
                                     # Return to let timer pick up EXECUTING state
@@ -455,8 +428,8 @@ class ASSISTANT_OT_view_request_payload(bpy.types.Operator):
         
         # Capture Sub-Agent Prompts (Dry Run)
         try:
-             task_data = session.agent_tools.consult_specialist("TASK_AGENT", "DEBUG_QUERY", dry_run=True)
-             completion_data = session.agent_tools.consult_specialist("COMPLETION_AGENT", "DEBUG_QUERY", dry_run=True)
+             task_data = session.agent_tools.spawn_agent("TASK_AGENT", "DEBUG_QUERY", dry_run=True)
+             completion_data = session.agent_tools.spawn_agent("COMPLETION_AGENT", "DEBUG_QUERY", dry_run=True)
         except Exception as e:
              task_data = f"Error: {e}"
              completion_data = f"Error: {e}"
@@ -474,7 +447,7 @@ class ASSISTANT_OT_view_request_payload(bpy.types.Operator):
         lines.append("SYSTEM PROMPT:")
         lines.append(system_prompt)
         lines.append("")
-        lines.append("TOOLS (Native):")
+        lines.append("TOOLS (MCP):")
         lines.append(json.dumps(tools, indent=2))
         lines.append("\n" + "="*60 + "\n")
         
@@ -486,7 +459,7 @@ class ASSISTANT_OT_view_request_payload(bpy.types.Operator):
                  lines.append("SYSTEM PROMPT:")
                  lines.append(str(data.get("system_prompt", "")))
                  lines.append("")
-                 lines.append("TOOLS (Native):")
+                 lines.append("TOOLS (MCP):")
                  lines.append(json.dumps(data.get("tool_schemas", []), indent=2))
              else:
                  lines.append(f"ERROR/RAW: {data}")

@@ -51,9 +51,9 @@ def search_polyhaven_assets(asset_type: str, query: str = "", limit: int = 10) -
     else:
         assets = all_assets
 
-    print(
-        f"[DEBUG] PolyHaven search: total assets={len(all_assets)}, after type filter={len(assets)}, type_num={type_num}"
-    )
+    # print(
+    #     f"[DEBUG] PolyHaven search: total assets={len(all_assets)}, after type filter={len(assets)}, type_num={type_num}"
+    # )
 
     # Filter by query if provided
     if query:
@@ -72,9 +72,9 @@ def search_polyhaven_assets(asset_type: str, query: str = "", limit: int = 10) -
                 for word in query_words
             )
         }
-        print(
-            f"[DEBUG] PolyHaven search: query='{query}' (words: {query_words}), results after filter={len(filtered)}"
-        )
+        # print(
+        #     f"[DEBUG] PolyHaven search: query='{query}' (words: {query_words}), results after filter={len(filtered)}"
+        # )
     else:
         filtered = assets
 
@@ -86,7 +86,7 @@ def search_polyhaven_assets(asset_type: str, query: str = "", limit: int = 10) -
     formatted = f"Found {len(results)} {type_name}"
 
     if results:
-        formatted += f". Use download_polyhaven() with one of these asset IDs:\n\n"
+        formatted += f". Use download_polyhaven(asset_type='{type_name}', asset_id='<id>') with one of these:\n\n"
         for asset_id, info in results:
             name = info.get("name", asset_id)
             categories = ", ".join(info.get("categories", []))
@@ -619,6 +619,10 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
 
     # Normalize format name
     format_lower = file_format.lower()
+    
+    # Aliases (PolyHaven typically uses 'gltf' key for both)
+    if format_lower == "glb": 
+        format_lower = "gltf"
 
     # Find the requested format (case-insensitive)
     format_data = None
@@ -797,14 +801,19 @@ def download_polyhaven(
 
     at = normalize.get(at, at)
 
-    if at == "hdri":
-        return download_polyhaven_hdri(asset_id, resolution, file_format or "exr")
+    try:
+        if at == "hdri":
+            return download_polyhaven_hdri(asset_id, resolution, file_format or "exr")
 
-    elif at == "texture":
-        return download_polyhaven_texture(asset_id, resolution)
+        elif at == "texture":
+            return download_polyhaven_texture(asset_id, resolution)
 
-    elif at == "model":
-        return download_polyhaven_model(asset_id, file_format or "blend")
+        elif at == "model":
+            return download_polyhaven_model(asset_id, file_format or "blend")
+    except ValueError as e:
+        return {"error": str(e), "hint": "Try a different resolution (e.g. '1k', '2k', '4k') or file format."}
+    except Exception as e:
+        return {"error": f"Download failed: {str(e)}"}
 
     else:
         return {
@@ -842,6 +851,7 @@ def register():
             "required": ["asset_type"],
         },
         category="PolyHaven",
+        requires_main_thread=False
     )
 
     tool_registry.register_tool(
@@ -859,6 +869,7 @@ def register():
             "required": ["asset_id"],
         },
         category="PolyHaven",
+        requires_main_thread=False
     )
 
     # Consolidated download tool

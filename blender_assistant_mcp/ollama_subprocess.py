@@ -76,7 +76,7 @@ class OllamaSubprocess:
             return True
 
         if not self.ollama_exe.exists():
-            print(f"[Ollama] ERROR: ollama.exe not found at {self.ollama_exe}")
+            print(f"[Ollama] Note: Bundled ollama.exe not found (Lite mode?). Assuming external server.")
             return False
 
         try:

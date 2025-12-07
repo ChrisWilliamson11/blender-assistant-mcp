@@ -1013,6 +1013,7 @@ def register():
             "required": ["query"],
         },
         category="Web",
+        requires_main_thread=False
     )
 
     tool_registry.register_tool(
@@ -1035,6 +1036,7 @@ def register():
             "required": ["query"],
         },
         category="Web",
+        requires_main_thread=False
     )
 
     tool_registry.register_tool(
@@ -1057,6 +1059,7 @@ def register():
             "required": ["query"],
         },
         category="Web",
+        requires_main_thread=True
     )
 
     tool_registry.register_tool(
@@ -1081,6 +1084,7 @@ def register():
             "required": ["url"],
         },
         category="Web",
+        requires_main_thread=False
     )
 
     tool_registry.register_tool(
@@ -1112,6 +1116,7 @@ def register():
             "required": ["url"],
         },
         category="Web",
+        requires_main_thread=False
     )
 
     tool_registry.register_tool(

@@ -832,8 +832,12 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
             # Thinking - italic/subtle
             row.emboss = "NONE"
             row.enabled = False
+        elif item.role.lower() == "system":
+            # System updates - make distinct
+            row.emboss = "NONE_OR_STATUS"
+            # Optional: could add color/icon later 
         else:
-            # System or other - default
+            # Other - default
             row.emboss = "NONE_OR_STATUS"
 
         split = row.split(factor=0.18)
@@ -863,7 +867,14 @@ class ASSISTANT_OT_new_chat(bpy.types.Operator):
         new_session.session_id = str(uuid.uuid4())
         
         # Switch to new chat
-        wm.assistant_active_chat_index = len(wm.assistant_chat_sessions) - 1
+        new_index = len(wm.assistant_chat_sessions) - 1
+        wm.assistant_active_chat_index = new_index
+        # Sync UI enum
+        try:
+            wm.assistant_active_chat_enum = str(new_index)
+        except Exception:
+            pass # Enum might not update immediately in some contexts
+            
         return {"FINISHED"}
 
 
@@ -888,8 +899,17 @@ class ASSISTANT_OT_delete_chat(bpy.types.Operator):
             assistant.reset_session(session_id)
             
             # Adjust index
-            if wm.assistant_active_chat_index >= len(wm.assistant_chat_sessions):
-                wm.assistant_active_chat_index = len(wm.assistant_chat_sessions) - 1
+            new_idx = wm.assistant_active_chat_index
+            if new_idx >= len(wm.assistant_chat_sessions):
+                new_idx = len(wm.assistant_chat_sessions) - 1
+                wm.assistant_active_chat_index = new_idx
+            
+            # Sync UI enum
+            try:
+                wm.assistant_active_chat_enum = str(new_idx)
+            except Exception:
+                pass
+                
         return {"FINISHED"}
 
 
@@ -913,6 +933,12 @@ class ASSISTANT_OT_rename_chat(bpy.types.Operator):
         idx = wm.assistant_active_chat_index
         if 0 <= idx < len(wm.assistant_chat_sessions):
             wm.assistant_chat_sessions[idx].name = self.new_name
+            
+        # Force redraw to update Enum labels
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+                
         return {"FINISHED"}
 
 
@@ -1320,7 +1346,9 @@ class ASSISTANT_OT_remember_chat(bpy.types.Operator):
         transcript = "\n".join(lines)
         
         prefs = context.preferences.addons[__package__].preferences
-        model_name = getattr(prefs, "model_file", "qwen2.5-coder:7b")
+        model_name = getattr(prefs, "model_file", "gpt-oss:20b")
+        if model_name == "NONE":
+             model_name = "gpt-oss:20b"
 
         def _worker():
             try:

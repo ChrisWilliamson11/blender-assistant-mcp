@@ -790,7 +790,7 @@ class ASSISTANT_OT_stop_ollama(bpy.types.Operator):
             self.report({"INFO"}, "Ollama server stopped")
             return {"FINISHED"}
         else:
-            self.report({"ERROR"}, "Failed to stop Ollama server")
+            self.report({"ERROR"}, "Ollama server hopefully stopped")
             return {"CANCELLED"}
 
 
@@ -2132,7 +2132,6 @@ class AssistantPreferences(bpy.types.AddonPreferences):
                 
                 # Category header row
                 row = cat_box.row()
-                row.allow_expand = True 
                 row.label(text=cat, icon="PREFERENCES")  # Using a generic icon instead of misleading arrow
                 
                 # Toggle All Button

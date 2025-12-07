@@ -1452,6 +1452,14 @@ def move_to_collection(
     """
 
     try:
+        # Robustness: Handle if LLM passes a list for collection_name
+        if isinstance(collection_name, list):
+            collection_name = collection_name[0] if collection_name else "Collection"
+
+        # Robustness: Handle if LLM passes a string for object_names
+        if isinstance(object_names, str):
+            object_names = [object_names]
+
         # Resolve or create target collection
         target_col = resolve_collection_by_name(collection_name)
 

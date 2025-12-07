@@ -24,10 +24,7 @@ class ContextManager:
             context.append(f"FOCUS OBJECT: {focus_object_name}")
             
             # Agent-specific unfolding (Simple Logic)
-            if agent_name == "MODELER":
-                context.append("(Mesh data unfolded: stats, topology, vertex groups, attributes - Use `inspect_data` for details)")
-            elif agent_name == "ANIMATOR":
-                context.append("(Animation data unfolded: f-curves, action, NLA tracks - Use `inspect_data` for details)")
+            context.append(f"FOCUS OBJECT: {focus_object_name}")
             
         return "\n".join(context)
 
@@ -59,26 +56,42 @@ class AgentTools:
                 2. PLAN: If complex, break down into steps.
                 3. EXECUTE: Use tools to achieve the goal.
                 4. VERIFY: Check if your actions worked.
-                5. REPORT: Return `expected_changes` JSON summary when done (matching Scene_Updates format)."""
+                5. REPORT: Return `expected_changes` JSON summary when done.
+                
+                RULES:
+                - CHECK BEFORE CREATING: Always check if an object or material exists (using `get_scene_info` or `inspect_data`) before trying to create it! Do not create duplicate objects (e.g. Floor, Floor.001) if the goal is to modify the existing one.
+                - Use `assistant_help(tool_names=['...'])` to get multiple schemas at once.
+                - For PolyHaven, always `search_polyhaven_assets` first to get an ID before downloading.
+                - If a tool fails with a specific error (e.g. Resolution not found), try a different parameter instead of giving up."""
             ),
             "COMPLETION_AGENT": Agent(
                 name="COMPLETION_AGENT",
                 description="Specializes in verifying if the user's request is fully satisfied.",
-                system_prompt="""You are the Completion Agent. Your ONLY job is to check if the user's original request has been fully completed.
+                system_prompt="""You are the Completion Agent. 
                 
-                INPUT:
-                - User Query
-                - Current Scene State (via `get_scene_info`)
-                - Execution History
+                YOUR JOB: Verify if the user's request is satisfied.
                 
-                OUTPUT:
-                - If complete: Return `{"thought": "Task is complete because...", "expected_changes": {"status": "COMPLETE"}}`
-                - If incomplete: Return `{"thought": "Task is incomplete because...", "expected_changes": {"status": "INCOMPLETE", "missing": ["..."]}}`
+                PROCESS:
+                1. INSPECT: Use tools like `get_scene_info` or `get_object_info` to check the scene.
+                2. EVALUATE: Compare scene state against the User's goal.
+                3. REPORT: Output the JSON decision.
+
+                RESPONSE FORMAT (Choose One):
+                1. IF COMPLETE:
+                {
+                    "thought": "I have verified X, Y, Z...",
+                    "expected_changes": {"status": "COMPLETE"}
+                }
                 
-                CRITICAL RULES:
-                - Output VALID JSON only.
-                - Verify efficiently using `get_scene_info`, `get_object_info`, or `execute_code` (for complex checks).
-                - If a tool fails, check usage with `assistant_help`."""
+                2. IF INCOMPLETE:
+                {
+                    "thought": "Missing X...",
+                    "expected_changes": {"status": "INCOMPLETE", "missing": ["X"]}
+                }
+                
+                RULES:
+                - You MUST use tools to verify. Do not guess.
+                - If you cannot verify, assume INCOMPLETE."""
             )
         }
         
@@ -108,6 +121,7 @@ class AgentTools:
     def _run_autonomous_loop(self, role, messages, model_to_use, tools=None):
         """Background thread loop for the agent."""
         turn_count = 0
+        empty_turns = 0 # Track consecutive empty turns
         from .tools import tool_registry
         
         while True:
@@ -146,7 +160,7 @@ class AgentTools:
                 content = response.get("content", "{}")
                 tool_calls = response.get("tool_calls", []) or response.get("message", {}).get("tool_calls", [])
 
-                # Native Tool Logic
+                # MCP Tool Logic
                 if (not content or content == "{}") and tool_calls:
                      try:
                          call = tool_calls[0]
@@ -156,7 +170,7 @@ class AgentTools:
                          if isinstance(fn_args, str):
                              fn_args = json.loads(fn_args)
                              
-                         new_data = {"thought": f"Invoking native tool: {fn_name}"}
+                         new_data = {"thought": f"Invoking MCP tool: {fn_name}"}
                          
                          if fn_name == "execute_code":
                              new_data["code"] = fn_args.get("code", "")
@@ -169,12 +183,15 @@ class AgentTools:
                              
                          content = json.dumps(new_data)
                      except Exception as e:
-                         print(f"[AgentTools] [AGENT: {role}] Failed to parse native tool call: {e}")
+                         print(f"[AgentTools] [AGENT: {role}] Failed to parse MCP tool call: {e}")
 
                 # Processing Content
                 try:
                     data = json.loads(content)
                 except json.JSONDecodeError:
+                    print(f"[AgentTools] [AGENT: {role}] JSON Parse Error. Content: {content[:100]}...")
+                    if self.message_callback:
+                         self.execute_in_main_thread(self.message_callback, role, f"Raw Response (Invalid JSON): {content}", name=role)
                     messages.append({"role": "user", "content": "Error: Invalid JSON response. Please return valid JSON."})
                     continue
                     
@@ -183,6 +200,25 @@ class AgentTools:
                 tool_call = data.get("tool_call")
                 expected_changes = data.get("expected_changes")
                 
+                # SILENT LOOP PROTECTION
+                if not thought and not code and not tool_call and not expected_changes:
+                     empty_turns += 1
+                     print(f"[AgentTools] [AGENT: {role}] Empty turn detected ({empty_turns}/5). Retrying...")
+                     
+                     if empty_turns >= 5:
+                         print(f"[AgentTools] [AGENT: {role}] ABORTING: Too many consecutive empty responses.")
+                         if self.message_callback:
+                             self.execute_in_main_thread(self.message_callback, role, "Agent stuck in silence. Aborting.", name=role)
+                         return
+
+                     if self.message_callback:
+                         self.execute_in_main_thread(self.message_callback, role, f"Empty Response (Retrying {empty_turns}/5)...", name=role)
+                     messages.append({"role": "user", "content": "Error: You returned empty JSON. Please return 'thought' AND ('code' OR 'tool_call' OR 'expected_changes')."})
+                     continue
+                
+                # Reset empty turn counter on valid response
+                empty_turns = 0
+
                 print(f"[AgentTools] [AGENT: {role}] Thought: {thought}")
                 
                 if self.message_callback and thought:
@@ -215,12 +251,23 @@ class AgentTools:
                 elif tool_call:
                     t_name = tool_call.get("name")
                     t_args = tool_call.get("args", {})
-                    print(f"[AgentTools] [AGENT: {role}] Executing Native Tool '{t_name}' via Queue...")
+                    print(f"[AgentTools] [AGENT: {role}] Executing MCP Tool '{t_name}' via Queue...")
                     
                     if self.message_callback:
                         self.execute_in_main_thread(self.message_callback, role, f"Executing {t_name}...", name=role)
 
-                    result = self.execute_in_main_thread(tool_registry.execute_tool, t_name, t_args)
+                    # SPECIAL CASE: spawn_agent must run in THIS thread to allow recursion/blocking
+                    # All other tools run in Main Thread via Queue
+                    # UPDATE: Now using metadata from registry
+                    t_info = tool_registry.get_tool_info(t_name)
+                    requires_main = t_info.get("requires_main_thread", True)
+                    
+                    if requires_main:
+                         result = self.execute_in_main_thread(tool_registry.execute_tool, t_name, t_args)
+                    else:
+                         # Safe to run in background (e.g. spawn_agent, finish_task)
+                         result = tool_registry.execute_tool(t_name, t_args)
+
                     result_str = json.dumps(result)
                     
                     messages.append({"role": "assistant", "content": content})
@@ -253,7 +300,8 @@ class AgentTools:
                              self.on_agent_finish(final_result)
                     
                     self.execute_in_main_thread(finish_callback)
-                    return
+                    # Helper return for synchronous calls
+                    return final_result
                     
                 else:
                     messages.append({"role": "assistant", "content": content})
@@ -265,14 +313,12 @@ class AgentTools:
                     self.execute_in_main_thread(self.message_callback, "system", f"Agent Error: {e}")
                 return 
 
-    def consult_specialist(self, role: str, query: str, focus_object: str = None, dry_run: bool = False):
+    def spawn_agent(self, role: str, query: str, focus_object: str = None, dry_run: bool = False):
         """delegate a task to a Worker Agent (Starts Background Thread)."""
-        role = role.upper()
+        role = role.upper().replace(" ", "_")
         if role not in self.agents:
-            if role in ["MODELER", "ANIMATOR", "RIGGER", "SHADERS", "CODER", "WEB", "RESEARCH"]:
-                 role = "TASK_AGENT"
-            else:
-                 return json.dumps({"error": f"Specialist '{role}' not found."})
+             valid_roles = list(self.agents.keys())
+             return json.dumps({"error": f"Agent role '{role}' not found. Valid roles: {valid_roles}"})
             
         agent = self.agents[role]
         
@@ -312,26 +358,7 @@ class AgentTools:
             # 4. Generate Tool Schemas
             tool_schemas = self.tool_manager.get_openai_tools(injected_tools)
 
-            # Inject 'finish_task' (but NOT for Completion Agent)
-            if role != "COMPLETION_AGENT":
-                tool_schemas.append({
-                    "type": "function",
-                    "function": {
-                        "name": "finish_task",
-                        "description": "Call this tool when you have completed your objective.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "summary": {"type": "string"},
-                                "expected_changes": {
-                                    "type": "array", 
-                                    "items": {"type": "string"}
-                                }
-                            },
-                            "required": ["expected_changes"]
-                        }
-                    }
-                })
+            # finish_task is now injected via ToolManager (system_tools)
             
             # 5. Generate SDK Hints (For Allowed but Disabled Tools)
             sdk_hints = self.tool_manager.get_system_prompt_hints(
@@ -372,16 +399,30 @@ class AgentTools:
             {"role": "user", "content": query}
         ]
         
-        print(f"[AgentTools] [AGENT: {role}] Starting Background Thread. Query: {query}")
+        print(f"[AgentTools] [AGENT: {role}] Starting Agent Loop. Query: {query}")
         
-        # Determine model
-        model_to_use = "qwen2.5-coder:7b"
+        # Determine model - Sync with Session
+        model_to_use = "gpt-oss:20b" # Default fallback
+        
+        # Priority 1: Dynamic Callback (Fresh from Prefs)
         if self.get_model_name:
-            try:
+             try:
                  name = self.get_model_name()
                  if name: model_to_use = name
-            except: pass
+             except: pass
+             
+        # Priority 2: Session Static (Backup)
+        elif self.session and hasattr(self.session, "model_name"):
+            model_to_use = self.session.model_name
 
+        # BLOCKING/SYNC MODE (For Sub-Agents called by Manager)
+        # If we are already in a background thread, run synchronously to enable "Context Handoff"
+        if threading.current_thread() is not threading.main_thread():
+             print(f"[AgentTools] [AGENT: {role}] Running SYNCHRONOUSLY (Recursion).")
+             result = self._run_autonomous_loop(role, messages, model_to_use, tool_schemas)
+             return result or {"status": "ERROR", "error": "Agent loop returned None"}
+
+        # ASYNC/THREAD MODE (For Top-Level Agents called by UI)
         t = threading.Thread(target=self._run_autonomous_loop, args=(role, messages, model_to_use, tool_schemas), daemon=True)
         t.start()
         

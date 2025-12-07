@@ -95,16 +95,26 @@ class ToolManager:
             category = tool.get("category", "Other")
             namespace = category.lower().replace(" ", "_").replace("-", "_")
             
+            # Generate Simplified Signature for Hint
+            # e.g. "task_add(description)"
+            schema = tool.get("inputSchema", {})
+            props = schema.get("properties", {})
+            args = []
+            for prop_name in props:
+                args.append(prop_name)
+            
+            sig = f"{name}({', '.join(args)})"
+
             if namespace not in tools_by_namespace:
                 tools_by_namespace[namespace] = []
-            tools_by_namespace[namespace].append(name)
+            tools_by_namespace[namespace].append(sig)
             
         if not tools_by_namespace:
             return ""
 
         lines = ["SDK CAPABILITIES (Use `assistant_help` to find tools):"]
         for namespace, tools in sorted(tools_by_namespace.items()):
-            # Format: - namespace: tool1, tool2, ...
+            # Format: - namespace: tool1(arg), tool2(arg), ...
             tool_list = ", ".join(sorted(tools))
             lines.append(f"- **{namespace}**: {tool_list}")
             
@@ -114,19 +124,24 @@ class ToolManager:
         """Get the 'Universe' of tools allowed for a role (ignoring preferences)."""
         base_set = {"execute_code", "assistant_help"} # Always allowed
 
+        # Universal Memory & RAG Access
+        universal_tools = {
+            "remember_fact", "remember_learning", "remember_preference", "search_memory",
+            "rag_query", "rag_get_stats"
+        }
+
         if role == "MANAGER":
-            return base_set.union({
-                # System / Memory / Task
-                "remember_fact", "remember_learning", "remember_preference",
+            return base_set.union(universal_tools).union({
+                # System / Planning
                 "task_add", "task_clear", "task_list", "task_update", "task_complete",
-                "consult_specialist",
+                "spawn_agent",
                 # Inspection / Vision
                 "get_object_info", "get_scene_info", "inspect_data", "search_data",
                 "capture_viewport_for_vision"
             })
         
         elif role == "TASK_AGENT":
-            return base_set.union({
+            return base_set.union(universal_tools).union({
                  # Blender
                 "create_collection", "delete_collection", "get_collection_info", 
                 "list_collections", "move_to_collection", "set_collection_color",
@@ -134,19 +149,20 @@ class ToolManager:
                 "get_active", "get_selection", "select_by_type", "set_active", "set_selection",
                 # Polyhaven
                 "download_polyhaven", "search_polyhaven_assets", "get_polyhaven_asset_info",
-                # Web/RAG
+                # Web
                 "web_search", "fetch_webpage", "search_image_url", "search_wikimedia_image", 
                 "extract_image_urls_from_webpage", "download_image_as_texture", 
-                "rag_get_stats", "rag_query",
                 # Vision
                 "capture_viewport_for_vision",
                 # Sketchfab/Stock (if available)
                 "sketchfab_download", "sketchfab_login", "sketchfab_search",
-                "check_stock_photo_download", "download_stock_photo", "search_stock_photos"
+                "check_stock_photo_download", "download_stock_photo", "search_stock_photos",
+                # System
+                "finish_task"
             })
 
         elif role == "COMPLETION_AGENT":
-            return base_set.union({
+            return base_set.union(universal_tools).union({
                  "get_scene_info", "get_object_info", "inspect_data", "search_data", 
                  "list_collections", "task_list",
                  "get_active", "get_selection"
@@ -159,7 +175,8 @@ class ToolManager:
         allowed = self.get_allowed_tools_for_role(role)
         
         # Start with core tools (ALWAYS ENABLED)
-        enabled = {"execute_code", "assistant_help"}
+        # spawn_agent is CRITICAL for the autonomous loop (Manager only now?), so it must be always enabled.
+        enabled = {"execute_code", "assistant_help", "spawn_agent"}
         
         # If we don't have prefs, usually implies "Show Everything" (or default behavior)
         # But per user request: "Enabled = MCP, Disabled = SDK". 
@@ -192,4 +209,5 @@ class ToolManager:
 - **CLEANUP**: Keep the scene organized. Use collections to group new objects.
 - **VERIFY**: Always verify your actions.
 - **TEST OVER GUESS**: If unsure about API behavior, write a small test script using `execute_code` instead of speculating.
-- **LEARN**: Use `remember_learning` to record pitfalls or version quirks."""
+- **LEARN**: Use `remember_learning` to record pitfalls or version quirks.
+- **PRO TIP**: You can embrace "Inline Code Execution". You may interleave Python blocks (` ```python ... ``` `) within your thought process to verify small steps immediately. The system will execute them for you!"""

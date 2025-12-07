@@ -34,12 +34,14 @@ from .tools import (
     memory_tools,
     task_tools,
     core_tools,
-
+    system_tools,
 )
 from . import (
     preferences,
     ui,
     assistant_sdk,
+    skills,
+    session_manager,
 )
 
 # Module list for registration
@@ -57,7 +59,9 @@ _modules = [
     memory_tools,
     task_tools,
     core_tools,
-
+    system_tools,
+    skills,
+    session_manager,
     assistant,
 ]
 

@@ -73,13 +73,18 @@ class AssistantSDK:
     Each namespace corresponds to a tool category from the registry.
     """
     
+    
     def __init__(self):
         self._namespaces = {}
+        self._flat_map = {}  # Map tool_name -> namespace_name (or "AMBIGUOUS")
         self._rebuild()
     
     def _rebuild(self):
         """Rebuild namespaces from current tool registry."""
         from collections import defaultdict
+        
+        self._namespaces = {}
+        self._flat_map = {}
         
         # Group tools by category
         tools_by_category = defaultdict(list)
@@ -93,7 +98,48 @@ class AssistantSDK:
             namespace = _Namespace(category, tools)
             setattr(self, namespace_name, namespace)
             self._namespaces[namespace_name] = namespace
-    
+            
+            # Populate flat map
+            for tool in tools:
+                t_name = tool['name']
+                if t_name in self._flat_map:
+                    self._flat_map[t_name] = "AMBIGUOUS"
+                else:
+                    self._flat_map[t_name] = namespace_name
+
+    def __getattr__(self, name: str) -> Any:
+        # Auto-rebuild if empty (lazy loading or registration happened later)
+        if not self._namespaces:
+            self._rebuild()
+            
+        # 1. Check if it's a known namespace
+        if name in self._namespaces:
+             return self._namespaces[name]
+
+        # 2. Check flattened access
+        if name in self._flat_map:
+            ns_name = self._flat_map[name]
+            if ns_name == "AMBIGUOUS":
+                # Find which namespaces have it for the error message
+                candidates = [ns for ns, n_obj in self._namespaces.items() 
+                              if hasattr(n_obj, name)]
+                raise AttributeError(
+                    f"Tool '{name}' is ambiguous (exists in multiple namespaces: {candidates}). "
+                    f"Please use specific namespace access: e.g. 'assistant_sdk.{candidates[0]}.{name}(...)'"
+                )
+            
+            # Delegate to the specific namespace
+            namespace = self._namespaces[ns_name]
+            return getattr(namespace, name)
+
+        # 3. Not found - Help the agent by listing valid namespaces
+        valid_namespaces = list(self._namespaces.keys())
+        raise AttributeError(
+            f"module '{__name__}' has no attribute '{name}'. "
+            f"Available namespaces: {valid_namespaces}. "
+            f"Or try a flattened tool name if unique."
+        )
+
     def help(self, namespace: str = None) -> Dict[str, Any]:
         """Get help for namespaces or specific namespace.
         
@@ -117,7 +163,8 @@ class AssistantSDK:
         else:
             return {
                 'namespaces': list(self._namespaces.keys()),
-                'usage': 'assistant_sdk.<namespace>.<tool_name>(**kwargs)'
+                'flattened_tools': [k for k, v in self._flat_map.items() if v != "AMBIGUOUS"],
+                'usage': 'assistant_sdk.<tool_name>(...) OR assistant_sdk.<namespace>.<tool_name>(**kwargs)'
             }
 
 
@@ -135,3 +182,17 @@ def get_assistant_sdk() -> AssistantSDK:
     if _assistant_sdk is None:
         _assistant_sdk = AssistantSDK()
     return _assistant_sdk
+
+
+# PEP 562: Module-level __getattr__
+# This allows 'import assistant_sdk; assistant_sdk.polyhaven' or 'from assistant_sdk import polyhaven'
+# to work by delegating attribute access to the singleton SDK instance.
+def __getattr__(name: str) -> Any:
+    sdk = get_assistant_sdk()
+    return getattr(sdk, name)
+
+
+def __dir__() -> list[str]:
+    """Expose SDK namespaces in dir() for autocompletion/inspection."""
+    sdk = get_assistant_sdk()
+    return list(globals().keys()) + list(sdk._namespaces.keys())

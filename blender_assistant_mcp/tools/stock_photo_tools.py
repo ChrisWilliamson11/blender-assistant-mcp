@@ -502,6 +502,7 @@ def register():
                 "required": ["source", "query"],
             },
             category="Stock Photos",
+            requires_main_thread=False
         )
 
         tool_registry.register_tool(

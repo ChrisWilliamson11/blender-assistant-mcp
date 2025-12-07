@@ -281,6 +281,7 @@ def register_tool(
     description: str,
     input_schema: Dict[str, Any],
     category: str = "Other",
+    requires_main_thread: bool = True
 ):
     """Register a tool in the MCP registry.
 
@@ -290,14 +291,16 @@ def register_tool(
         description: Human-readable description
         input_schema: JSON Schema for tool parameters
         category: Tool category for UI organization (e.g., "Blender", "Web", "PolyHaven")
+        requires_main_thread: If True, tool must run on Blender Main Thread. If False, specific thread safe.
     """
     _TOOLS[name] = {
         "function": func,
         "description": description,
         "inputSchema": input_schema,
         "category": category,
+        "requires_main_thread": requires_main_thread
     }
-    print(f"[MCP] Registered tool: {name} (category: {category})")
+    print(f"[MCP] Registered tool: {name} (category: {category}, main_thread={requires_main_thread})")
 
 
 def unregister_tool(name: str):
@@ -305,6 +308,11 @@ def unregister_tool(name: str):
     if name in _TOOLS:
         del _TOOLS[name]
         print(f"[MCP] Unregistered tool: {name}")
+
+
+def get_tool_info(name: str) -> Dict[str, Any]:
+    """Get metadata for a tool."""
+    return _TOOLS.get(name, {})
 
 
 def execute_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:

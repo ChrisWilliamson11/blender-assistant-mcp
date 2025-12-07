@@ -199,28 +199,7 @@ class AssistantSession:
         
 
 
-        # Register consult_specialist tool
-        tool_registry.register_tool(
-            name="consult_specialist",
-            func=self.agent_tools.consult_specialist,
-            description="Delegate a task to a Worker Agent (TASK_AGENT) or Verify completion (COMPLETION). Returns a JSON with 'thought', 'code', and 'expected_changes'.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "role": {
-                        "type": "string",
-                        "description": "Agent role (TASK_AGENT, COMPLETION_AGENT)",
-                        "enum": ["TASK_AGENT", "COMPLETION_AGENT"]
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "Specific task description for the agent"
-                    }
-                },
-                "required": ["role", "query"]
-            },
-            category="System"
-        )
+        # spawn_agent and finish_task are now registered in blender_assistant_mcp.tools.system_tools
 
     def add_message(self, role: str, content: str, name: str = None, images: List[str] = None, tool_calls: List[Dict] = None):
         """Add a message to history."""
@@ -258,33 +237,25 @@ class AssistantSession:
             scene_context = "Scene Changes: (no scene changes since last turn)"
 
         return f"""You are the Manager Agent (The "Brain").
-GOAL: Plan, delegate, and track complex Blender tasks. If the task is very simple (a '1 liner') complete it with execute_code & bpy.
-CONTEXT:
-- Memory: {memory_context}
-- {scene_context}
 
-{self.tool_manager.get_common_behavior_prompt()}
+        GOAL: Plan, delegate, and track complex Blender tasks. If the task is very simple (a 1-liner) complete it yourself with execute_code & bpy.
+        When using python for simple tasks, "Inline Code Execution" is available for efficiency. Feel free to write Python blocks (` ```python ... ``` `) directly in your response to run quick checks or simple actions without formal tool calls.
+        Multiple code blocks will be processed one after the other, and the execution environment maintains a persistant state, so you could define a function in one code block then run it later from another for a real free-form thinking/coding experience.
+        CONTEXT:
+        - Memory: {memory_context}
+        - {scene_context}
 
-{sdk_hints}
+        - **User**: The human manager.
+        - **Manager (You)**: The planner.
+        - **Task Agent**: (Role: `TASK_AGENT`) The worker. Use `spawn_agent(role="TASK_AGENT", ...)` for: **Web Search**, **Downloading Images**, **PolyHaven/Sketchfab Assets**, and rigorous Blender operations.
+        - **Completion Agent**: (Role: `COMPLETION_AGENT`) Task verifier. Call this to check if user request is satisfied.
+        - **SCENE_UPDATES**: The scene watcher. This is a stream of changes to the scene.
 
-RULES:
-1. Use `consult_specialist(role="TASK_AGENT", ...)` for ALL Blender work other than the absolute simplest.
-2. You MAY use `execute_code` to call `assistant_sdk` methods (e.g., `assistant_sdk.task.add(...)`) if the MCP tool is unavailable.
-3. Verify work using `consult_specialist(role="COMPLETION_AGENT", ...)` before marking tasks DONE.
-4. Keep `task_list` updated.
-5. If the user asks for a simple quick action, you may still delegate it to TASK_AGENT.
+        MEMORY
+        {memory_context}
 
-CHAT PARTICIPANTS
-- **User**: The human manager.
-- **Manager (You)**: The planner.
-- **Task Agent**: The worker who executes code/tools.
-- **Completion Agent**: Verifier.
-
-MEMORY
-{memory_context}
-
-PROTOCOL & BEHAVIORAL RULES
-{self._load_protocol()}"""
+        PROTOCOL & BEHAVIORAL RULES
+        {self._load_protocol()}"""
 
     def _load_protocol(self) -> str:
         """Load the agentic protocol from protocol.md."""
@@ -339,7 +310,6 @@ PROTOCOL & BEHAVIORAL RULES
                 tool_calls=message.get("tool_calls") # Original MCP calls for history
             )
             
-        # Validate calls against enabled tools
         valid_calls = []
         for call in calls:
             if call.tool in enabled_tools or call.tool == "execute_code":
@@ -425,7 +395,7 @@ PROTOCOL & BEHAVIORAL RULES
         """Callback from background agent thread."""
         # Add result to history
         result_str = json.dumps(result)
-        self.add_message("tool", result_str, name="consult_specialist")
+        self.add_message("tool", result_str, name="spawn_agent")
         
         # Wake up assistant logic
         # We set state to EXECUTING so the main loop picks it up and triggers the next LLM step

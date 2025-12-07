@@ -97,7 +97,7 @@ class MemoryManager:
         except Exception as e:
             print(f"Failed to save abstract: {e}")
 
-    def create_abstract(self, session_history: List[Dict[str, str]], model_name: str = "qwen2.5-coder:7b") -> Optional[str]:
+    def create_abstract(self, session_history: List[Dict[str, str]], model_name: str = "gpt-oss:20b") -> Optional[str]:
         """Generate an abstract from session history using LLM."""
         from . import ollama_adapter
         
