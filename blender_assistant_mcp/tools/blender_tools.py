@@ -955,11 +955,15 @@ def capture_viewport_for_vision(
         # Capture viewport (UI thread operation)
         scene = bpy.context.scene
         prev_fp = scene.render.filepath
+        prev_fmt = scene.render.image_settings.file_format
+        
         scene.render.filepath = temp_path
+        scene.render.image_settings.file_format = "PNG"
         try:
             bpy.ops.render.opengl(write_still=True)
         finally:
             scene.render.filepath = prev_fp
+            scene.render.image_settings.file_format = prev_fmt
 
         # Load and scale image
         if not os.path.exists(temp_path):
@@ -1015,24 +1019,54 @@ def capture_viewport_for_vision(
                 model_name = ""
 
             try:
+                from ..preferences import get_preferences
+                from ..ollama_subprocess import get_ollama
+                
+                # Check what's actually installed
+                ollama_proc = get_ollama()
+                installed_models = []
+                if ollama_proc.is_running():
+                    installed_models = [m.get("name", "") for m in ollama_proc.list_models()]
+                
+                # 1. Try from preferences if no override
                 if not model_name:
-                    from ..preferences import get_preferences
                     prefs = get_preferences()
                     if prefs:
-                        # Prefer dedicated vision model, fallback to active chat model
-                        model_name = getattr(prefs, "vision_model", "") or getattr(
-                            prefs, "model_file", ""
-                        )
-                        
-                        # If preference is also "default" (unlikely but possible), clear it
+                        model_name = getattr(prefs, "vision_model", "") or getattr(prefs, "model_file", "")
                         if model_name and model_name.lower() == "default":
                             model_name = ""
-                            
-                        # Hard fallback to minicpm-v:8b if nothing else is set
-                        if not model_name:
-                            model_name = "minicpm-v:8b"
+
+                # 2. If we have a candidate, verify it exists. If not, clear it.
+                if model_name:
+                    # Fuzzy match: if we have "minicpm-v:8b" but user has "minicpm-v:latest", allows it?
+                    # For now, strict match or "startswith" match against installed list
+                    if installed_models and model_name not in installed_models:
+                        # Try to find a partial match
+                        match = next((m for m in installed_models if m.startswith(model_name)), None)
+                        if match:
+                            print(f"[Vision] Upgrading '{model_name}' to installed '{match}'")
+                            model_name = match
+                        else:
+                            print(f"[Vision] Model '{model_name}' not installed. Searching for alternatives...")
+                            model_name = "" # Reset to trigger auto-detection
+
+                # 3. Auto-detect if no valid model selected
+                if not model_name and installed_models:
+                    # Priority list for vision models
+                    vision_keywords = ["minicpm-v", "llava", "llama3.2-vision", "moondream"]
+                    for keyword in vision_keywords:
+                        candidate = next((m for m in installed_models if keyword in m.lower()), None)
+                        if candidate:
+                            model_name = candidate
+                            print(f"[Vision] Auto-detected vision model: {model_name}")
+                            break
+                
+                # 4. Hard fallback (if nothing installed or offline)
+                if not model_name:
+                    model_name = "minicpm-v:8b"
+
             except Exception as e:
-                print(f"[Vision] Error reading preferences: {e}")
+                print(f"[Vision] Error resolving model: {e}")
                 pass
             
             print(f"[Vision] Using model: {model_name}")

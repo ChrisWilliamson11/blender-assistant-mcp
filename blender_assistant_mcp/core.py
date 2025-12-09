@@ -193,12 +193,13 @@ class AssistantSession:
             session=self
         ) # Initialize AgentTools
         self.history: List[Dict[str, str]] = []
+        self.full_history: List[Dict[str, str]] = [] # Permanent record for UI
         self.tool_queue: List[ToolCall] = []
         self.state = "IDLE" # IDLE, THINKING, EXECUTING, DONE
         self.last_error = None
         self.current_task_state = ""
 
-    def add_message(self, role: str, content: str, name: str = None, images: List[str] = None, tool_calls: List[Dict] = None):
+    def add_message(self, role: str, content: str, name: str = None, images: List[str] = None, tool_calls: List[Dict] = None, usage: Dict = None):
         """Add a message to history."""
         msg = {"role": role, "content": content}
         if name:
@@ -207,7 +208,11 @@ class AssistantSession:
             msg["images"] = images
         if tool_calls:
             msg["tool_calls"] = tool_calls
+        if usage:
+            msg["usage"] = usage
+            
         self.history.append(msg)
+        self.full_history.append(msg)
         
         # Trigger Gradient Compression if history gets long
         if len(self.history) > 20:

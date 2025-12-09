@@ -288,10 +288,33 @@ class AgentTools:
                 # Reset empty turn counter on valid response
                 empty_turns = 0
 
+                # THINKING STALL PROTECTION
+                # If agent returns ONLY thought (no code/tool/finish) for multiple turns
+                if thought and not code and not tool_call and not expected_changes:
+                     # Check if we are stalling
+                     if not "thought_only_turns" in locals(): thought_only_turns = 0
+                     thought_only_turns += 1
+                     
+                     if thought_only_turns > 3:
+                         print(f"[AgentTools] [AGENT: {role}] ABORTING: Agent stuck in thinking loop.")
+                         if self.message_callback:
+                             self.execute_in_main_thread(self.message_callback, role, "Agent stuck in thinking loop. Aborting.", name=role)
+                         return {"status": "ERROR", "error": "Agent stuck in thinking loop."}
+                         
+                     # Prompt for action
+                     print(f"[AgentTools] [AGENT: {role}] Thought only turn ({thought_only_turns}/3). Prompting for action...")
+                     messages.append({"role": "assistant", "content": content})
+                     messages.append({"role": "user", "content": "System: You provided 'thought' but no action. Please Execute Code, Call a Tool, or Return expected_changes."})
+                     continue
+                else:
+                    thought_only_turns = 0
+
                 print(f"[AgentTools] [AGENT: {role}] Thought: {thought}")
                 
                 if self.message_callback and thought:
-                    self.execute_in_main_thread(self.message_callback, "thinking", thought, name=role)
+                    # Pass usage statistics if available (so UI can store it)
+                    # We need to access 'usage' which was captured earlier (Line 213)
+                    self.execute_in_main_thread(self.message_callback, "thinking", thought, name=role, usage=usage if "usage" in locals() else None)
                 
                 # Execution Priority: Code > Tool Call > Expected Changes
                 if code:
@@ -373,6 +396,7 @@ class AgentTools:
                     return final_result
                     
                 else:
+                    # Generic text response? Usually shouldn't happen in Agent Mode
                     messages.append({"role": "assistant", "content": content})
                     messages.append({"role": "user", "content": "continue"})
                     

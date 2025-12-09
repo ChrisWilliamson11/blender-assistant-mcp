@@ -78,7 +78,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
     _error = None
     _is_running = False
 
-    def _add_message(self, role, content, tool_name=None, images=None):
+    def _add_message(self, role, content, tool_name=None, images=None, usage=None, name=None):
         """Add message to UI chat history."""
         wm = bpy.context.window_manager
         
@@ -98,6 +98,18 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         item.role = role
         item.content = content
         if images and len(images) > 0:
+            import base64
+            # Just take first image for now
+            item.image_data = images[0]
+            
+        if tool_name:
+            item.tool_name = tool_name
+        elif name:
+            item.tool_name = name # Fallback
+            
+        if usage:
+            import json
+            item.usage = json.dumps(usage)
             item.image_data = images[0] # UI only supports showing one image for now
             
         if tool_name:
@@ -253,19 +265,14 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                             session_ui = wm.assistant_chat_sessions[wm.assistant_active_chat_index]
                             
                             # Sync Python session history to Blender UI Collection
-                            hist_len = len(session.history)
+                            # Use full_history to prevent UI deletion during compression
+                            hist_len = len(session.full_history)
                             ui_len = len(session_ui.messages)
                             
-                            # Detect Desync (Compression or truncated history)
-                            if hist_len < ui_len:
-                                # History was compressed/truncated. Rebuild UI.
-                                session_ui.messages.clear()
-                                ui_len = 0
-                                
                             # Append new messages
                             if hist_len > ui_len:
                                 for i in range(ui_len, hist_len):
-                                    msg_data = session.history[i]
+                                    msg_data = session.full_history[i]
                                     new_msg = session_ui.messages.add()
                                     raw_role = msg_data.get("role", "System")
                                     
@@ -274,10 +281,17 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                                         new_msg.role = "User"
                                     elif raw_role == "assistant":
                                         new_msg.role = "Assistant"
+                                    elif raw_role == "thinking":
+                                        new_msg.role = "Thinking"
                                     else:
                                         new_msg.role = raw_role
                                         
                                     new_msg.content = msg_data.get("content", "")
+                                    
+                                    # Sync usage metrics
+                                    if "usage" in msg_data:
+                                        import json
+                                        new_msg.usage = json.dumps(msg_data["usage"])
                                     
                                 # Scroll to bottom on new content
                                 wm.assistant_chat_message_index = len(session_ui.messages) - 1
@@ -330,22 +344,19 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                             # No tools, we are done?
                             if not content:
                                 if thinking:
-                                    # Model thought but didn't act or speak.
-                                    # This is a "stalled" state.
-                                    # We should consult the COMPLETION agent to see if we are actually done.
-                                    self._add_message("System", "Verifying completion...")
+                                    # Model is thinking but not acting/speaking.
+                                    # Increment stall counter
+                                    if not hasattr(self, "_stalled_turns"):
+                                        self._stalled_turns = 0
                                     
+                                    # Check if thinking is repetitive? (Simpler: just count consecutive thinking-only turns)
+                                    self._stalled_turns += 1
+                                    
+                                    if self._stalled_turns > 3:
+                                        self._add_message("System", "Assistant stalled (Thinking Loop). Aborting.")
+                                        return self._finish(context)
+                                        
                                     # Consult COMPLETION agent
-                                    # We need to run this in a thread or just queue it?
-                                    # Since we are in the timer, we can't block.
-                                    # But spawn_agent is synchronous (calls LLM).
-                                    # We should probably queue a "forced" tool call to spawn_agent.
-                                    
-                                    # Better approach: Inject a system message and restart step
-                                    # asking the model to either act or confirm completion.
-                                    # OR, we can just assume it's NOT done and ask it to continue.
-                                    
-                                    # Let's try to use the COMPLETION agent as intended.
                                     # We'll inject a tool call to `spawn_agent` into the queue manually.
                                     from .core import ToolCall
                                     
@@ -373,10 +384,21 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                                     # Empty response (No tools, no content, no thinking).
                                     # This usually means the model stopped prematurely or messed up JSON.
                                     # We should KICK it to continue.
+                                    if not hasattr(self, "_stalled_turns"):
+                                        self._stalled_turns = 0
+                                    self._stalled_turns += 1
+                                    
+                                    if self._stalled_turns > 3:
+                                        self._add_message("System", "Assistant stalled (Empty Response Loop). Aborting.")
+                                        return self._finish(context)
+
                                     self._add_message("System", "Empty response detected. Auto-continuing...")
                                     session.add_message("user", "System: You returned an empty response. Please continue your work or call `finish_task` if done.")
                                     self._start_step(context, session)
                                     return {"PASS_THROUGH"}
+                            
+                            # Content present - Reset stall counter
+                            self._stalled_turns = 0
                             return self._finish(context)
                     else:
                         self._add_message("Error", "No response from model")

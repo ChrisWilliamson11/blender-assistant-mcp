@@ -333,6 +333,8 @@ class AssistantChatMessage(bpy.types.PropertyGroup):
     content: bpy.props.StringProperty(name="Content", default="")
     image_data: bpy.props.StringProperty(name="Image Data", default="")  # Base64 encoded
     tool_name: bpy.props.StringProperty(name="Tool Name", default="")
+    usage: bpy.props.StringProperty(name="Usage Metrics", default="") # JSON string of tokens/time
+
 
 
 class AssistantChatSession(bpy.types.PropertyGroup):
@@ -1357,6 +1359,7 @@ class ASSISTANT_OT_copy_debug_conversation(bpy.types.Operator):
         lines = []
         lines.extend(header)
         # Messages
+        # Messages
         for i, msg in enumerate(session.messages):
             role = msg.role or ""
             name = getattr(msg, "tool_name", "") if role == "Tool" else ""
@@ -1364,6 +1367,20 @@ class ASSISTANT_OT_copy_debug_conversation(bpy.types.Operator):
             content = msg.content or ""
             # Keep messages readable; we keep full content since the user asked for all messages
             lines.append(f"{i + 1:02d} {prefix} {content}")
+            
+            # Append Usage Metrics if available
+            if hasattr(msg, "usage") and msg.usage:
+                import json
+                try:
+                    usage_dict = json.loads(msg.usage)
+                    prompt_len = usage_dict.get("prompt_eval_count", 0)
+                    eval_len = usage_dict.get("eval_count", 0)
+                    duration = usage_dict.get("total_duration", 0) / 1e9
+                    metrics = f"    [Metrics] Context: {prompt_len} tokens | Output: {eval_len} tokens | Time: {duration:.2f}s"
+                    lines.append(metrics)
+                except:
+                    pass
+
         text = "\n".join(lines)
 
         context.window_manager.clipboard = text
