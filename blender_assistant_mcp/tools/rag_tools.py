@@ -126,7 +126,11 @@ def register():
     tool_registry.register_tool(
         "rag_query",
         rag_query,
-        "Query the bundled Blender docs RAG and return top matches with metadata and excerpts. Supports source bias and page_type filtering.",
+        (
+            "Query the bundled Blender Documentation RAG.\n"
+            "USAGE: 'How do I use Geometry Nodes?'. Filters: prefer_source='API'/'Manual'.\n"
+            "RETURNS: {'results': [{'content': '...', 'url': '...', 'similarity': 0.8}, ...]}"
+        ),
         {
             "type": "object",
             "properties": {
@@ -144,7 +148,11 @@ def register():
     tool_registry.register_tool(
         "rag_get_stats",
         rag_get_stats,
-        "Get RAG status and basic stats (enabled, document_count, db_path).",
+        (
+            "Get RAG system status.\n"
+            "RETURNS: {'enabled': True, 'doc_count': 12000, 'db_path': '...'}\n"
+            "USAGE: Check this if queries return empty results."
+        ),
         {"type": "object", "properties": {}},
         category="RAG",
     )

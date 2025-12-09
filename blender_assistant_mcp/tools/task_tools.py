@@ -142,7 +142,11 @@ def register():
     tool_registry.register_tool(
         "task_add",
         task_add,
-        "Add a new task to the plan.",
+        (
+            "Add a new task to your plan.\n"
+            "USAGE: Description='Create Cube'. Adds to TODO list.\n"
+            "RETURNS: {'success': True, 'task_index': 0}"
+        ),
         {
             "type": "object",
             "properties": {
@@ -156,7 +160,11 @@ def register():
     tool_registry.register_tool(
         "task_update",
         task_update,
-        "Update a task's status and add notes (Checkpoint).",
+        (
+            "Update a task's status and add notes (Checkpoint).\n"
+            "USAGE: index=0, status='DONE', notes='Created cube and scaled it'.\n"
+            "RETURNS: {'success': True, 'current_state': {...}}"
+        ),
         {
             "type": "object",
             "properties": {
@@ -172,7 +180,10 @@ def register():
     tool_registry.register_tool(
         "task_complete",
         task_complete,
-        "Mark a task as DONE.",
+        (
+            "Mark a task as DONE (Shortcut for task_update).\n"
+            "USAGE: index=0. Marks task as completed."
+        ),
         {
             "type": "object",
             "properties": {
@@ -186,7 +197,11 @@ def register():
     tool_registry.register_tool(
         "task_list",
         task_list,
-        "List all tasks and their status.",
+        (
+            "List all tasks in your plan.\n"
+            "USAGE: Call this to see what step is next.\n"
+            "RETURNS: {'tasks': [{'index': 0, 'name': '...', 'status': 'TODO'}, ...]}"
+        ),
         {
             "type": "object",
             "properties": {},
@@ -198,7 +213,10 @@ def register():
     tool_registry.register_tool(
         "task_clear",
         task_clear,
-        "Clear the task list.",
+        (
+            "Clear the task list.\n"
+            "USAGE: Use when starting a completely new objective."
+        ),
         {
             "type": "object",
             "properties": {

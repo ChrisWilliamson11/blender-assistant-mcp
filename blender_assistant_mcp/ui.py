@@ -383,7 +383,7 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
 
             from . import ollama_subprocess
 
-            # Simple status - just show load/unload buttons without checking actual status
+            # Simple status - just show load_model/unload_model buttons without checking actual status
             # (checking status blocks UI thread)
             status_box = box.box()
 
@@ -392,8 +392,6 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
 
             # Check if model is loaded (cached, non-blocking)
             try:
-                from . import ollama_subprocess
-
                 ollama = ollama_subprocess.get_ollama()
                 # Use cached status if available, don't block UI
                 # Store status for use in Chat label below
@@ -402,17 +400,23 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
                 is_loaded = None
 
             server_row.label(text="Ollama Server:")
-            server_row.operator("assistant.start_ollama", text="Start", icon="PLAY")
-            server_row.operator("assistant.stop_ollama", text="Stop", icon="CANCEL")
+            
+            if prefs.use_external_ollama:
+                server_row.label(text="External (Remote)", icon="WORLD")
+            else:
+                server_row.operator("assistant.start_ollama", text="Start", icon="PLAY")
+                server_row.operator("assistant.stop_ollama", text="Stop", icon="CANCEL")
 
             # Model control
-            status_row = status_box.row(align=True)
-            status_row.label(text="Model Control:")
-            status_row.operator("assistant.load_model", text="Load", icon="IMPORT")
-            status_row.operator("assistant.unload_model", text="Unload", icon="EXPORT")
-            status_row.operator(
-                "assistant.refresh_model_status", text="", icon="FILE_REFRESH"
-            )
+            # Hide model pre-loading controls if using External Server (user request)
+            if not prefs.use_external_ollama:
+                status_row = status_box.row(align=True)
+                status_row.label(text="Model Control:")
+                status_row.operator("assistant.load_model", text="Load", icon="IMPORT")
+                status_row.operator("assistant.unload_model", text="Unload", icon="EXPORT")
+                status_row.operator(
+                    "assistant.refresh_model_status", text="", icon="FILE_REFRESH"
+                )
 
             # box.separator()
 
@@ -577,7 +581,7 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
                 header_row = box.row()
                 header_row.label(
                     text=f"{selected_item.role}:",
-                    icon="USER" if selected_item.role == "You" else "CONSOLE",
+                    icon="USER" if (selected_item.role == "You" or selected_item.role == "User") else "CONSOLE",
                 )
                 if selected_item.image_data:
                     header_row.label(text="📎 Image", icon="IMAGE_DATA")
@@ -810,6 +814,50 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
 
     bl_idname = "ASSISTANT_UL_chat"
 
+    def filter_items(self, context, data, property):
+        # Get prefs
+        try:
+            prefs = context.preferences.addons[__package__].preferences
+            show_thinking = getattr(prefs, "show_thinking", True)
+            show_scene = getattr(prefs, "show_scene_updates", True)
+            show_tools = getattr(prefs, "show_tool_outputs", True)
+        except Exception:
+            # Fallback if prefs not ready
+            return [], []
+
+        # Assuming data is the AssistantChatSession and property is "messages"
+        items = getattr(data, property)
+        
+        # helper to generate flags
+        # Bitmask: msg[i] is visible if (flags[i] & self.bitflag_filter_item)
+        
+        flt_flags = []
+        
+        for item in items:
+            visible = True
+            
+            # 1. Thinking
+            if item.role == "Thinking" or item.role == "thinking":
+               if not show_thinking:
+                   visible = False
+            
+            # 2. Tool
+            elif item.role == "Tool":
+                if not show_tools:
+                    visible = False
+            
+            # 3. Scene Updates (System role + content check)
+            elif (item.role.lower() == "system") and ("Scene Changes" in item.content or "SCENE_UPDATES" in item.content):
+                if not show_scene:
+                    visible = False
+            
+            if visible:
+                flt_flags.append(self.bitflag_filter_item) # Visible
+            else:
+                flt_flags.append(0) # Hidden
+                
+        return flt_flags, []
+
     def draw_item(
         self, context, layout, data, item, icon, active_data, active_propname, index
     ):
@@ -819,7 +867,7 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
         # Role-based row colors for better readability
         # User (lightest), Assistant (medium), Tool (darkest)
         row = layout.row(align=True)
-        if item.role == "You":
+        if item.role == "You" or item.role == "User":
             # User messages - lightest (almost white)
             row.emboss = "NONE"
         elif item.role == "Assistant":
@@ -828,10 +876,17 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
         elif item.role == "Tool":
             # Tool messages - darkest
             row.emboss = "NORMAL"
-        elif item.role == "Thinking":
+        elif item.role == "Thinking" or item.role == "thinking":
             # Thinking - italic/subtle
             row.emboss = "NONE"
             row.enabled = False
+            
+            # Formatting "Name (Thinking)"
+            name = item.tool_name if item.tool_name else "Assistant"
+            # Cleanup name (underscore to space)
+            name = name.replace("_", " ").title()
+            display_role = f"{name} (Thinking)"
+            
         elif item.role.lower() == "system":
             # System updates - make distinct
             row.emboss = "NONE_OR_STATUS"
@@ -839,9 +894,13 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
         else:
             # Other - default
             row.emboss = "NONE_OR_STATUS"
+            display_role = item.role
 
-        split = row.split(factor=0.18)
-        split.label(text=item.role)
+        if item.role != "Thinking" and item.role != "thinking":
+             display_role = item.role
+
+        split = row.split(factor=0.25) # Slightly wider for "Assistant (Thinking)"
+        split.label(text=display_role)
 
         # Show content with image indicator if attached
         content_row = split.row(align=True)

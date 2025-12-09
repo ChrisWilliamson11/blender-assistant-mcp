@@ -136,7 +136,7 @@ def main():
         universe = tool_manager.get_enabled_tools_for_role(role)
         # Mock active prefs (default tools)
         active_mcp_set = tool_manager.get_enabled_tools(None) 
-        core_tools = {"execute_code", "assistant_help"}
+        core_tools = {"execute_code", "sdk_help"}
         
         # MCP Tools (Intersection)
         injected_tools = universe.intersection(active_mcp_set.union(core_tools))

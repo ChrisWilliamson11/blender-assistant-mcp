@@ -476,7 +476,11 @@ def register():
         tool_registry.register_tool(
             "search_stock_photos",
             search_stock_photos,
-            f"Search for stock photos. Available sources: {', '.join(available_sources)}. Returns high-quality free photos for textures and references.",
+            (
+                "Search stock photos (Unsplash/Pexels).\n"
+                "USAGE: Pass `source` ('unsplash' or 'pexels') and `query`.\n"
+                "RETURNS: {'photos': [{'id': '...', 'description': '...', 'width': ...}, ...]}"
+            ),
             {
                 "type": "object",
                 "properties": {
@@ -508,7 +512,11 @@ def register():
         tool_registry.register_tool(
             "download_stock_photo",
             download_stock_photo,
-            f"Download a stock photo by ID (optionally apply as texture). Available sources: {', '.join(available_sources)}.",
+            (
+                "Download a stock photo and apply as texture.\n"
+                "USAGE: Pass `source` and `photo_id` from search results.\n"
+                "RETURNS: {'success': True, 'file_path': '...', 'image_name': '...'}"
+            ),
             {
                 "type": "object",
                 "properties": {

@@ -1,4 +1,4 @@
-"""Core tools for the assistant (execute_code, assistant_help)."""
+"""Core tools for the assistant (execute_code, sdk_help)."""
 
 import bpy
 import json
@@ -128,7 +128,7 @@ def execute_code(code: str):
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
-def assistant_help(tool_name: str = None, tool_names: list[str] = None):
+def sdk_help(tool_name: str = None, tool_names: list[str] = None):
     """
     Get help for specific tool(s) or SDK methods.
     
@@ -172,16 +172,34 @@ def assistant_help(tool_name: str = None, tool_names: list[str] = None):
              
         # Category Mode
         if not found_tool and target_category:
+            import bpy
+            prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
+            
+            # Build set of exposed tools
+            exposed_tools = {t.name for t in prefs.tool_config_items if t.expose_mcp}
+            # Always expose core tools
+            exposed_tools.add("execute_code")
+            exposed_tools.add("sdk_help")
+            
             tools_in_cat = []
             for name, data in _TOOLS.items():
                 cat = data.get("category", "Other")
                 if cat.lower() == target_category.lower():
-                    tools_in_cat.append(name)
+                    # STRICT FILTER: Only show tools that are exposed as MCP
+                    if name in exposed_tools:
+                        tools_in_cat.append(name)
+                        
             if tools_in_cat:
                 return {
                     "category": target_category,
                     "tools": sorted(tools_in_cat),
-                    "hint": f"Use assistant_help(tool_names=['tool1', 'tool2']) for details."
+                    "hint": "Only exposed MCP tools are listed. For SDK methods, inspect `assistant_sdk` module via Python."
+                }
+            else:
+                 return {
+                    "category": target_category,
+                    "tools": [],
+                    "hint": "No MCP tools exposed in this category. Check `assistant_sdk` for Python methods."
                 }
 
         # Schema Mode
@@ -213,13 +231,31 @@ def assistant_help(tool_name: str = None, tool_names: list[str] = None):
                 if flat_lookup and flat_lookup != "AMBIGUOUS":
                     sdk_path = f"assistant_sdk.{tool_name_key}"
             
+            # Check exposure status for clearer hint
+            import bpy
+            prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
+            is_exposed = False
+            for t in prefs.tool_config_items:
+                if t.name == tool_name_key:
+                    is_exposed = t.expose_mcp
+                    break
+            
+            # Use exposure status to refine the hint
+            if not is_exposed and tool_name_key not in ["execute_code", "sdk_help"]:
+                 tool_def["hint"] = (
+                    f"⚠️ SDK ONLY: This tool is NOT exposed as an MCP tool. "
+                    f"You MUST use `{sdk_path}(...)` via `execute_code`. "
+                    f"Attempting to call `{tool_name_key}` directly will FAIL."
+                )
+            elif "hint" not in tool_def:
+                # Standard hint if exposed (optional SDK usage)
+                 tool_def["hint"] = (
+                    f"SDK Access: `{sdk_path}(...)`. "
+                    "You may call this tool directly or via Python code."
+                )
+            
             tool_def["python_sdk_usage"] = f"{sdk_path}(...)"
             
-            if "hint" not in tool_def:
-                tool_def["hint"] = (
-                    f"To use: `{sdk_path}(...)`. "
-                    "Do NOT import tool name."
-                )
             return tool_def
 
         return None # Not found
@@ -263,10 +299,21 @@ def assistant_help(tool_name: str = None, tool_names: list[str] = None):
         }
 
     # LIST CATEGORIES (Default)
-    categories = sorted(list({t.get("category", "Other") for t in _TOOLS.values()}))
+    # LIST CATEGORIES (Default)
+    import bpy
+    prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
+    exposed_tools = {t.name for t in prefs.tool_config_items if t.expose_mcp}
+    exposed_tools.add("execute_code")
+    exposed_tools.add("sdk_help")
+
+    categories = set()
+    for name, tool_data in _TOOLS.items():
+        if name in exposed_tools:
+            categories.add(tool_data.get("category", "Other"))
+            
     return {
-        "available_categories": categories,
-        "usage": "assistant_help(tool_names=['tool1', 'tool2']) for batch schemas."
+        "available_categories": sorted(list(categories)),
+        "usage": "sdk_help(tool_names=['tool1', 'tool2']) for batch schemas."
     }
 
 
@@ -276,7 +323,12 @@ def register():
         name="execute_code",
         func=execute_code,
         description=(
-            "Run Python code in Blender. Call `assistant_sdk` methods or `bpy`.\n"
+            "Execute Python code in Blender. This is your PRIMARY way to interact with Blender and the SDK.\n"
+            "Capabilities:\n"
+            "1. Run raw `bpy` commands (e.g. `bpy.ops.mesh.primitive_cube_add()`).\n"
+            "2. Access SDK Tools via `assistant_sdk` (e.g. `assistant_sdk.polyhaven.search(...)`).\n"
+            "3. Use `print()` to output information for reasoning (stdout is captured).\n"
+            "4. Define functions and classes for reuse in subsequent calls.\n\n"
             "BEST PRACTICE: Filter large data in Python before printing! "
             "Don't dump 10,000 items; use `print(items[:5])` or `[i.name for i in items if ...]`."
         ),
@@ -285,7 +337,7 @@ def register():
             "properties": {
                 "code": {
                     "type": "string",
-                    "description": "Python code. Filter results before printing to save context."
+                    "description": "Python code to execute. Maintains state across calls."
                 }
             },
             "required": ["code"]
@@ -294,9 +346,16 @@ def register():
     )
 
     register_tool(
-        name="assistant_help",
-        func=assistant_help,
-        description="Get help/schema for tools. Supports BATCH mode to save steps.",
+        name="sdk_help",
+        func=sdk_help,
+        description=(
+            "The capabilities discovery tool. Use this to find tools and learn how to use them.\n"
+            "MODES:\n"
+            "1. DISCOVER: Call without arguments to list all available categories/namespaces.\n"
+            "2. SCHEMA: Pass `tool_name` (e.g. 'polyhaven') to get tools in that category, or a specific tool name (e.g. 'download_polyhaven') to get its full signature.\n"
+            "3. BATCH: Pass `tool_names=['tool_a', 'tool_b']` to get multiple schemas at once. ALWAYS use this when you need multiple tools to save steps.\n"
+            "4. SDK: Pass `tool_name='assistant_sdk'` to learn about the Python SDK structure."
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -306,8 +365,8 @@ def register():
                 },
                 "tool_names": {
                     "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of tool names to retrieve schemas for at once."
+                    "items": { "type": "string" },
+                    "description": "List of tool names to retrieve schemas for at once. Use this to discover multiple tools in one turn."
                 }
             },
             "required": []

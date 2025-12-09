@@ -55,14 +55,14 @@ def verify():
         print("FAILURE: assistant_sdk.system is MISSING from shim.")
         print(f"Available attributes: {dir(sdk)}")
 
-    # Test assistant_help
-    print("\nTesting assistant_help...")
-    help_result = blender_tools.assistant_help(tool="system.consult_specialist")
+    # Test sdk_help
+    print("\nTesting sdk_help...")
+    help_result = blender_tools.sdk_help(tool="system.consult_specialist")
     if "results" in help_result and len(help_result["results"]) > 0:
-        print("SUCCESS: assistant_help returned docs for system.consult_specialist.")
+        print("SUCCESS: sdk_help returned docs for system.consult_specialist.")
         print(f"Usage: {help_result['results'][0]['sdkUsage']}")
     else:
-        print("FAILURE: assistant_help returned no results.")
+        print("FAILURE: sdk_help returned no results.")
         print(help_result)
 
 if __name__ == "__main__":

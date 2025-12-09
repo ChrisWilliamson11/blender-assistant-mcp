@@ -252,19 +252,36 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                         if wm.assistant_chat_sessions and 0 <= wm.assistant_active_chat_index < len(wm.assistant_chat_sessions):
                             session_ui = wm.assistant_chat_sessions[wm.assistant_active_chat_index]
                             
-                            # Simple sync: append new messages
-                            # Assuming session.history only grows
+                            # Sync Python session history to Blender UI Collection
                             hist_len = len(session.history)
                             ui_len = len(session_ui.messages)
                             
+                            # Detect Desync (Compression or truncated history)
+                            if hist_len < ui_len:
+                                # History was compressed/truncated. Rebuild UI.
+                                session_ui.messages.clear()
+                                ui_len = 0
+                                
+                            # Append new messages
                             if hist_len > ui_len:
                                 for i in range(ui_len, hist_len):
                                     msg_data = session.history[i]
                                     new_msg = session_ui.messages.add()
-                                    new_msg.role = msg_data.get("role", "System")
+                                    raw_role = msg_data.get("role", "System")
+                                    
+                                    # Normalize for UI (User Request: "User")
+                                    if raw_role == "user" or raw_role == "You":
+                                        new_msg.role = "User"
+                                    elif raw_role == "assistant":
+                                        new_msg.role = "Assistant"
+                                    else:
+                                        new_msg.role = raw_role
+                                        
                                     new_msg.content = msg_data.get("content", "")
-                                    # Handle tool info if present (stored in content usually or ignored by simple UI)
-                                    # UI renderer parses content.
+                                    
+                                # Scroll to bottom on new content
+                                wm.assistant_chat_message_index = len(session_ui.messages) - 1
+                                
                     except Exception as e:
                         print(f"Failed to sync history to UI: {e}")
 
@@ -281,6 +298,11 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                         return self._finish(context)
                     
                     if self._response:
+                        # CRITICAL FIX: Check for adapter errors first
+                        if self._response.get("error"):
+                             self._add_message("Error", f"LLM Error: {self._response['error']}")
+                             return self._finish(context)
+
                         # Process response
                         try:
                             prefs = context.preferences.addons[__package__].preferences
@@ -316,8 +338,8 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                                     # Consult COMPLETION agent
                                     # We need to run this in a thread or just queue it?
                                     # Since we are in the timer, we can't block.
-                                    # But consult_specialist is synchronous (calls LLM).
-                                    # We should probably queue a "forced" tool call to consult_specialist.
+                                    # But spawn_agent is synchronous (calls LLM).
+                                    # We should probably queue a "forced" tool call to spawn_agent.
                                     
                                     # Better approach: Inject a system message and restart step
                                     # asking the model to either act or confirm completion.

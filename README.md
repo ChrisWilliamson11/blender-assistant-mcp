@@ -17,7 +17,7 @@ Features:
 
 MCP Tools:
 
-Below is a list of the tools. Each tool takes JSON-style arguments & can be exposed as an MCP tool, or discoverable through an SDK assistant_sdk to keep context light. If running through the sdk, the LLM can use assistant_help to get information about tools. It maintains a 'state' of the scene through 'get_scene_info' to maintain a current image of the scene hierarchy, similar to using an outliner.
+Below is a list of the tools. Each tool takes JSON-style arguments & can be exposed as an MCP tool, or discoverable through an SDK assistant_sdk to keep context light. If running through the sdk, the LLM can use sdk_help to get information about tools. It maintains a 'state' of the scene through 'get_scene_info' to maintain a current image of the scene hierarchy, similar to using an outliner.
 
 - Blender
   - get_scene_info(an outliner style representation of the scene)
@@ -33,7 +33,7 @@ Below is a list of the tools. Each tool takes JSON-style arguments & can be expo
   - move_to_collection(object_names[], collection_name, unlink_from_others) — Move objects to a collection
   - set_collection_color(collection_name, color_tag) — Set collection color tag (Blender 4.2+)
   - delete_collection(collection_name, delete_objects) — Delete a collection (and optionally its objects)
-  - assistant_help(tool, tools[]) — Get JSON schemas and usage examples for assistant_sdk tool aliases
+  - sdk_help(tool, tools[]) — Get JSON schemas and usage examples for assistant_sdk tool aliases
 
 - Selection
   - get_selection() — List selected objects

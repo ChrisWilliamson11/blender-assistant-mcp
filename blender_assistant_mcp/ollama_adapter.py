@@ -148,11 +148,13 @@ def chat_completion(
             # Always stream; accumulate content and tool_calls
             with urllib.request.urlopen(req_local, timeout=300) as response_local:
                 print(f"[Ollama Adapter] Streaming response...")
-                content_parts: list[str] = []
-                thinking_parts: list[str] = []
+                # Metrics
+                metrics = {}
+                content_parts = []
+                thinking_parts = []
                 final_tool_calls = None
-                last_message = None
                 top_level_tool_calls = None
+                last_message = None
 
                 for raw_line in response_local:
                     try:
@@ -166,10 +168,6 @@ def chat_completion(
                     except Exception:
                         # Ignore non-JSON keep-alives
                         continue
-
-                    # Debug: Show raw JSON to diagnose thinking fields
-                    # if debug_mode and not obj.get("done"):
-                    #     print(f"[Ollama Adapter] Chunk: {json.dumps(obj)}")
 
                     # Accumulate message/content
                     msg = obj.get("message")
@@ -200,6 +198,10 @@ def chat_completion(
                         top_level_tool_calls = obj.get("tool_calls")
 
                     if obj.get("done") is True:
+                        # Capture usage stats
+                        metrics["prompt_eval_count"] = obj.get("prompt_eval_count", 0)
+                        metrics["eval_count"] = obj.get("eval_count", 0)
+                        metrics["total_duration"] = obj.get("total_duration", 0)
                         break
 
                 # Build final message
@@ -217,13 +219,13 @@ def chat_completion(
                     final_message["tool_calls"] = tool_calls
 
                 print(
-                    f"[Ollama Adapter] Stream complete: {len(content)} chars, {len(thinking)} thinking chars, {len(tool_calls) if tool_calls else 0} tool calls"
+                    f"[Ollama Adapter] Stream complete: {len(content)} chars, {len(thinking)} thinking chars, {len(tool_calls) if tool_calls else 0} tool calls. Metrics: {metrics}"
                 )
                 
                 if debug_mode:
                     print(f"[Ollama Adapter] FINAL RESPONSE:\n{json.dumps(final_message, indent=2)}")
                     
-                return {"message": final_message}
+                return {"message": final_message, "usage": metrics}
 
         try:
             result = _do_request(payload)

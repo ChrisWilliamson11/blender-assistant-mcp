@@ -1,7 +1,7 @@
 import unittest
 import bpy
 import json
-from blender_assistant_mcp.blender_tools import assistant_help, execute_code
+from blender_assistant_mcp.blender_tools import sdk_help, execute_code
 from blender_assistant_mcp.core import AssistantSession
 from blender_assistant_mcp.tool_manager import ToolManager
 
@@ -10,11 +10,11 @@ class TestArchitecturalFixes(unittest.TestCase):
         # Clear scene
         bpy.ops.wm.read_factory_settings(use_empty=True)
         
-    def test_assistant_help_flexibility(self):
-        """Verify assistant_help handles various input formats."""
+    def test_sdk_help_flexibility(self):
+        """Verify sdk_help handles various input formats."""
         
         # 1. Test combined path with prefix
-        res = assistant_help(tool="assistant_sdk.polyhaven.search/download")
+        res = sdk_help(tool="assistant_sdk.polyhaven.search/download")
         self.assertNotIn("error", res)
         self.assertIn("results", res)
         aliases = [r["alias"] for r in res["results"]]
@@ -22,13 +22,13 @@ class TestArchitecturalFixes(unittest.TestCase):
         self.assertIn("polyhaven.download", aliases)
         
         # 2. Test fuzzy match
-        res = assistant_help(tool="polyhaven")
+        res = sdk_help(tool="polyhaven")
         self.assertNotIn("error", res)
         aliases = [r["alias"] for r in res["results"]]
         self.assertIn("polyhaven.search", aliases)
         
         # 3. Test exact match
-        res = assistant_help(tool="blender.create_object")
+        res = sdk_help(tool="blender.create_object")
         self.assertNotIn("error", res)
         self.assertEqual(res["results"][0]["alias"], "blender.create_object")
 

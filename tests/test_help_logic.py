@@ -16,7 +16,7 @@ sys.modules["blender_assistant_mcp.mcp_tools"] = MockMCPTools()
 
 # Actually, I can just run a simplified version of the logic to prove the regex/string manipulation works.
 
-def assistant_help_logic(tool, tools=None):
+def sdk_help_logic(tool, tools=None):
     queries = []
     if tools:
         queries.extend([str(t).strip() for t in tools if str(t).strip()])
@@ -56,6 +56,6 @@ def assistant_help_logic(tool, tools=None):
     return results
 
 # Test cases
-print("Test 1:", assistant_help_logic("assistant_sdk.polyhaven.search/download"))
-print("Test 2:", assistant_help_logic("polyhaven"))
-print("Test 3:", assistant_help_logic("create_object"))
+print("Test 1:", sdk_help_logic("assistant_sdk.polyhaven.search/download"))
+print("Test 2:", sdk_help_logic("polyhaven"))
+print("Test 3:", sdk_help_logic("create_object"))

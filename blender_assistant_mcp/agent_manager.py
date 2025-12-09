@@ -60,7 +60,8 @@ class AgentTools:
                 
                 RULES:
                 - CHECK BEFORE CREATING: Always check if an object or material exists (using `get_scene_info` or `inspect_data`) before trying to create it! Do not create duplicate objects (e.g. Floor, Floor.001) if the goal is to modify the existing one.
-                - Use `assistant_help(tool_names=['...'])` to get multiple schemas at once.
+                - NO INTERACTIVE QUESTIONS: You are running in a background loop. You CANNOT ask the user questions directly. If you are missing critical information (e.g. file paths, dimensions) that prevents you from proceeding, you must ABORT by calling `finish_task` with a clear summary of what is missing.
+                - Use `sdk_help(tool_names=['...'])` to get multiple schemas at once.
                 - For PolyHaven, always `search_polyhaven_assets` first to get an ID before downloading.
                 - If a tool fails with a specific error (e.g. Resolution not found), try a different parameter instead of giving up."""
             ),
@@ -148,14 +149,82 @@ class AgentTools:
             print(f"[AgentTools] [AGENT: {role}] Turn {turn_count}...")
             
             try:
-                # LLM Request
+                # DYNAMIC PROMPT INJECTION
+                # Recover tools + behavior + protocol
+                base_prompt = self.agents[role].system_prompt
+                
+                # 1. SDK Support (What tools can I call via execute_code?)
+                # Retrieve universe for this role, then filter out what is enabled as MCP
+                allowed_tools = self.tool_manager.get_allowed_tools_for_role(role)
+                enabled_mcp = {t["function"]["name"] for t in tools} if tools else set()
+                
+                # Generate the SDK list (Tools allowed but NOT enabled as MCP)
+                sdk_section = self.tool_manager.get_system_prompt_hints(enabled_mcp, allowed_tools)
+                
+                # 2. Behavior (Common rules)
+                behavior_section = self.tool_manager.get_common_behavior_prompt()
+                
+                # 3. Protocol (If applicable - usually via context or memory, but we'll stick to basics for now)
+                protocol_section = ""
+                if self.session: 
+                     # Reuse the session's protocol loading logic or just use the text if available
+                    protocol_section = self.session._load_protocol() if hasattr(self.session, '_load_protocol') else "Refer to protocol for behavioral rules."
+                
+                # 4. MCP Tools (Mini-List)
+                # We list just the names to avoid token waste, as the adapter sends the full schema in the 'tools' param.
+                mcp_list_str = json.dumps(sorted(list(enabled_mcp)), indent=2)
+                mcp_section = f"MCP TOOLS (Primary Interactions):\n{mcp_list_str}"
+
+                full_system_prompt = f"{base_prompt}\n\n{mcp_section}\n\n{sdk_section}\n\n{behavior_section}\n\n{protocol_section}"
+                
+                # Inject into messages if it's the first turn or if we want to reinforce it
+                # Ideally, we replace the first 'system' message if it exists, or prepend it
+                current_messages = list(messages)
+                if current_messages and current_messages[0].get("role") == "system":
+                     current_messages[0]["content"] = full_system_prompt
+                else:
+                     current_messages.insert(0, {"role": "system", "content": full_system_prompt})
+
+
+                # LLM Request                # LLM Request
                 response = self.llm_client.chat_completion(
                     model_path=model_to_use, 
-                    messages=messages,
+                    messages=current_messages,
                     format="json",
                     temperature=0.2,
                     tools=tools
                 )
+                
+                # CRITICAL: Check for LLM errors (e.g. Ollama offline)
+                if response.get("error"):
+                    err_msg = response["error"]
+                    print(f"[AgentTools] [AGENT: {role}] LLM Error: {err_msg}")
+                    if self.message_callback:
+                        self.execute_in_main_thread(
+                            self.message_callback, 
+                            "system", 
+                            f"FATAL ERROR: LLM Request Failed: {err_msg}", 
+                            name="System"
+                        )
+                    # Abort loop
+                    return
+                
+                # Context Metrics (Post-Execution)
+                usage = response.get("usage", {})
+                if usage:
+                    prompt_tokens = usage.get("prompt_eval_count", 0)
+                    completion_tokens = usage.get("eval_count", 0)
+                    total_dur = usage.get("total_duration", 0) / 1e9 # ns to s
+                    
+                    print(f"[AgentTools] [AGENT: {role}] Usage: {prompt_tokens} input tokens, {completion_tokens} output tokens ({total_dur:.2f}s)")
+                    
+                    if self.message_callback:
+                         self.execute_in_main_thread(
+                            self.message_callback, 
+                            "system", 
+                            f"Context: {prompt_tokens} tokens | Output: {completion_tokens} tokens | Time: {total_dur:.2f}s", 
+                            name=role
+                        )
                 
                 content = response.get("content", "{}")
                 tool_calls = response.get("tool_calls", []) or response.get("message", {}).get("tool_calls", [])
@@ -222,7 +291,7 @@ class AgentTools:
                 print(f"[AgentTools] [AGENT: {role}] Thought: {thought}")
                 
                 if self.message_callback and thought:
-                    self.execute_in_main_thread(self.message_callback, role, thought, name=role)
+                    self.execute_in_main_thread(self.message_callback, "thinking", thought, name=role)
                 
                 # Execution Priority: Code > Tool Call > Expected Changes
                 if code:
@@ -325,9 +394,17 @@ class AgentTools:
         # Build Context (User Requirement)
         initial_context = ""
         if self.session and len(self.session.history) > 0:
-            # Find the first user message
-            first_user_msg = next((m["content"] for m in self.session.history if m["role"] == "user"), "")
-            initial_context = f"\n\n[OVERALL GOAL (NORTH STAR)]: {first_user_msg}"
+            # Find the LATEST user message (Dynamic North Star)
+            # Iterate backwards to find the most recent "user" or "User" message
+            last_user_msg = ""
+            for m in reversed(self.session.history):
+                msg_role = m.get("role", "")
+                if msg_role in ("user", "User", "You"):
+                    last_user_msg = m["content"]
+                    break
+            
+            if last_user_msg:
+                initial_context = f"\n\n[OVERALL GOAL (NORTH STAR)]: {last_user_msg}"
         
         context_prompt = self.context_manager.get_context_prompt(role, focus_object)
         
@@ -351,8 +428,8 @@ class AgentTools:
             
             active_mcp_set = self.tool_manager.get_enabled_tools(prefs)
             
-            # 3. Intersect + Force CORE TOOLS (execute_code, assistant_help)
-            core_tools = {"execute_code", "assistant_help"}
+            # 3. Intersect + Force CORE TOOLS (execute_code, sdk_help)
+            core_tools = {"execute_code", "sdk_help"}
             injected_tools = universe.intersection(active_mcp_set.union(core_tools))
             
             # 4. Generate Tool Schemas

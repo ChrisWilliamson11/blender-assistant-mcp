@@ -21,11 +21,11 @@ def get_tool_schema(name):
         "category": tool.get("category", "Other"),
     }
 
-def test_assistant_help():
+def test_sdk_help():
     target_tool = "task_add"
     found_tool = _TOOLS[target_tool]
     
-    print(f"Testing assistant_help logic for {target_tool}...")
+    print(f"Testing sdk_help logic for {target_tool}...")
     try:
         # BUG: Accessing "name" on the tool dict, which doesn't have it
         tool_name_key = found_tool["name"]
@@ -36,4 +36,4 @@ def test_assistant_help():
         print(f"Caught unexpected exception: {e}")
 
 if __name__ == "__main__":
-    test_assistant_help()
+    test_sdk_help()

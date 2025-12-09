@@ -41,7 +41,10 @@ def register():
     tool_registry.register_tool(
         "remember_preference",
         remember_preference,
-        "Store a user preference persistently.",
+        (
+            "Store a user preference persistently.\n"
+            "USAGE: Key='color_scheme', Value='dark'. Persists across sessions."
+        ),
         {
             "type": "object",
             "properties": {
@@ -56,7 +59,10 @@ def register():
     tool_registry.register_tool(
         "remember_fact",
         remember_fact,
-        "Store a general fact or instruction persistently.",
+        (
+            "Store a general fact or instruction persistently.\n"
+            "USAGE: 'User likes low-poly art'. Persists across sessions."
+        ),
         {
             "type": "object",
             "properties": {
@@ -71,7 +77,10 @@ def register():
     tool_registry.register_tool(
         "remember_learning",
         remember_learning,
-        "Record a technical learning, pitfall, or version quirk.",
+        (
+            "Record a technical learning for future reference.\n"
+            "USAGE: Topic='Blender 4.2', Insight='Eevee Next requires...'. Use when you solve a hard problem."
+        ),
         {
             "type": "object",
             "properties": {
@@ -86,7 +95,11 @@ def register():
     tool_registry.register_tool(
         "search_memory",
         search_memory,
-        "Semantically search memory for relevant facts/learnings.",
+        (
+            "Semantically search persistent memory.\n"
+            "USAGE: 'How does user like materials?'.\n"
+            "RETURNS: List of relevant facts/preferences."
+        ),
         {
             "type": "object",
             "properties": {

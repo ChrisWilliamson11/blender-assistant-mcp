@@ -147,6 +147,51 @@ def get_polyhaven_asset_info(asset_id: str) -> dict:
     return {"success": True, "info": info, "formatted": formatted}
 
 
+def _solve_resolution(available_res: list, target_res: str) -> str:
+    """Find the best matching resolution from available options."""
+    if not available_res:
+        return target_res
+        
+    target = target_res.lower()
+    if target in available_res:
+        return target
+        
+    def parse_res(r):
+        if not r: return 0
+        r = r.lower()
+        if 'k' in r:
+            try: return int(r.replace('k', '')) * 1024
+            except: return 0
+        try: return int(r)
+        except: return 0
+            
+    target_val = parse_res(target)
+    valid = [(r, parse_res(r)) for r in available_res if parse_res(r) > 0]
+    valid.sort(key=lambda x: x[1])
+    
+    if not valid: return available_res[0]
+
+    # Max/Highest logic
+    if target_val == 0 or target in ["max", "highest", "best"]:
+        return valid[-1][0]
+        
+    best = valid[0]
+    min_diff = abs(valid[0][1] - target_val)
+    
+    for r, val in valid:
+        diff = abs(val - target_val)
+        if diff < min_diff:
+            min_diff = diff
+            best = (r, val)
+        elif diff == min_diff:
+            if val > best[1]: best = (r, val)
+            
+    if best[0] != target_res:
+        print(f"[PolyHaven] Resolution '{target_res}' not found. Using '{best[0]}'.")
+        
+    return best[0]
+
+
 def download_polyhaven_hdri(
     asset_id: str, resolution: str = "2k", file_format: str = "exr"
 ) -> dict:
@@ -176,15 +221,25 @@ def download_polyhaven_hdri(
         raise ValueError(f"Asset '{asset_id}' is not an HDRI")
 
     hdri_files = files["hdri"]
-    if resolution not in hdri_files:
-        available = ", ".join(hdri_files.keys())
-        raise ValueError(f"Resolution '{resolution}' not available. Available: {available}")
+    
+    # Check format
+    if file_format not in hdri_files:
+        available_formats = list(hdri_files.keys())
+        # Prefer EXR > HDR
+        if "exr" in available_formats: file_format = "exr"
+        elif "hdr" in available_formats: file_format = "hdr"
+        else: file_format = available_formats[0]
+        print(f"[PolyHaven] Requested format not found. Switching to {file_format}.")
 
-    if file_format not in hdri_files[resolution]:
-        available = ", ".join(hdri_files[resolution].keys())
-        raise ValueError(f"Format '{file_format}' not available. Available: {available}")
+    # Solve Resolution
+    available_res = list(hdri_files[file_format].keys())
+    resolution = _solve_resolution(available_res, resolution)
 
-    download_url = hdri_files[resolution][file_format]["url"]
+    if resolution not in hdri_files[file_format]:
+        available = ", ".join(hdri_files[file_format].keys())
+        raise ValueError(f"Resolution '{resolution}' not available for format '{file_format}'. Available: {available}")
+
+    download_url = hdri_files[file_format][resolution]["url"]
 
     # Download the file
     download_dir = os.path.join(bpy.app.tempdir, "polyhaven_hdris")
@@ -282,54 +337,60 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
 
     with httpx.Client() as client:
         response = client.get(api_url, timeout=10.0)
+        # Check for 404 manually
         if response.status_code == 404:
             raise ValueError(f"Asset '{asset_id}' not found on PolyHaven.")
         response.raise_for_status()
         files = response.json()
 
     # Check if this is a texture
-    if "Diffuse" not in files and "blend" not in files:
-        raise ValueError(f"Asset '{asset_id}' is not a texture")
-
+    # Textures typically have keys like 'Diffuse', 'Roughness' OR 'blend' etc.
+    # We should check if it's NOT a Model or HDRI predominantly.
+    # But usually valid texture assets have specific map names OR 'blend' files.
+    
     # Download directory
     download_dir = os.path.join(bpy.app.tempdir, "polyhaven_textures", asset_id)
     os.makedirs(download_dir, exist_ok=True)
 
     # Download all texture maps
     texture_maps = {}
-    # Map types to look for (handle various naming conventions)
-    # PolyHaven and other sources use different names for the same maps
+    
+    # Map types config
     map_types_config = {
-        "Diffuse": [
-            "Diffuse",
-            "diff",
-            "col",
-            "Color",
-            "BaseColor",
-            "Albedo",
-            "albedo",
-        ],
+        "Diffuse": ["Diffuse", "diff", "col", "Color", "BaseColor", "Albedo", "albedo"],
         "Displacement": ["Displacement", "disp", "Disp", "height", "Height"],
-        "Normal": [
-            "Normal",
-            "nor_gl",
-            "nor_dx",
-            "norm",
-            "Norm",
-            "normal",
-        ],  # nor_gl = OpenGL, nor_dx = DirectX
+        "Normal": ["Normal", "nor_gl", "nor_dx", "norm", "Norm", "normal"], 
         "Roughness": ["Roughness", "Rough", "rough", "Gloss", "gloss"],
         "AO": ["AO", "ao", "AmbientOcclusion", "ambient_occlusion"],
         "Metalness": ["Metalness", "Metal", "metal", "Metallic", "metallic"],
         "Specular": ["Specular", "spec", "Spec", "specular"],
         "Bump": ["Bump", "bump"],
-        "ARM": ["arm", "ARM"],  # Combined AO+Roughness+Metalness (packed texture)
+        "ARM": ["arm", "ARM"],
     }
+    
+    # Gather Available Resolutions
+    # Check all map variants to find common resolution set
+    candidates = set()
+    for map_key, map_variants in map_types_config.items():
+         for variant in map_variants:
+              if variant in files:
+                   # files[variant] is {res: {fmt: ...}}
+                   candidates.update(files[variant].keys())
+    
+    # Also check blend if present (sometimes textures just have blend)
+    if "blend" in files:
+        candidates.update(files["blend"].keys())
+        
+    available_res = list(candidates)
+    
+    # Solve Resolution
+    target_res = resolution
+    resolution = _solve_resolution(available_res, resolution)
+    
+    if resolution != target_res:
+         print(f"[PolyHaven] Switching texture download to {resolution} (Available: {available_res})")
 
-    print(f"[PolyHaven] Downloading texture set: {asset_id} ({resolution})...")
-    print(f"[PolyHaven] Available map types in API response: {list(files.keys())}")
-
-    # Find which maps are available (check all variants)
+    # Find which maps are available for this resolution
     available_maps = {}
     for map_name, variants in map_types_config.items():
         for variant in variants:
@@ -337,71 +398,67 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
                 available_maps[map_name] = variant
                 break
 
-    print(f"[PolyHaven] Maps found for {resolution}: {list(available_maps.keys())}")
+    if not available_maps and "blend" in files and resolution in files["blend"]:
+         # Fallback to downloading blend? 
+         # The function promises to apply to active object.
+         # For now, let's error if individual maps aren't found, OR warn.
+         pass
+         
     total_maps = len(available_maps)
+    
+    if total_maps == 0:
+         hint = available_res if available_res else "None"
+         raise ValueError(f"No compatible texture maps found for resolution '{resolution}'. Available resolutions: {hint}")
 
-    # Start progress bar (if context available)
+    print(f"[PolyHaven] Downloading texture set: {asset_id} ({resolution})...")
+    print(f"[PolyHaven] Maps: {list(available_maps.keys())}")
+
+    # Start progress bar
     wm = bpy.context.window_manager
     has_progress = wm is not None
-
     if has_progress:
-        try:
-            wm.progress_begin(0, total_maps)
-        except:
-            has_progress = False
+        try: wm.progress_begin(0, total_maps)
+        except: has_progress = False
 
     current_map = 0
 
     try:
         for map_name, api_key in available_maps.items():
-            # Get the first available format (usually jpg or png)
+            # Get the first available format
             formats = files[api_key][resolution]
             file_format = list(formats.keys())[0]
             download_url = formats[file_format]["url"]
 
-            file_path = os.path.join(
-                download_dir, f"{asset_id}_{map_name}_{resolution}.{file_format}"
-            )
+            file_path = os.path.join(download_dir, f"{asset_id}_{map_name}_{resolution}.{file_format}")
 
             if has_progress:
-                try:
-                    wm.progress_update(current_map)
-                except:
-                    has_progress = False
+                try: wm.progress_update(current_map)
+                except: has_progress = False
 
             with httpx.Client() as client:
                 with client.stream("GET", download_url, timeout=60.0) as response:
                     response.raise_for_status()
                     total_size = int(response.headers.get("content-length", 0))
                     downloaded = 0
-
                     with open(file_path, "wb") as f:
                         for chunk in response.iter_bytes(chunk_size=8192):
                             f.write(chunk)
                             downloaded += len(chunk)
                             if total_size > 0 and has_progress:
-                                file_progress = current_map + (
-                                    downloaded / total_size
-                                )
-                                try:
-                                    wm.progress_update(file_progress)
-                                except:
-                                    has_progress = False
+                                fp = current_map + (downloaded / total_size)
+                                try: wm.progress_update(fp)
+                                except: has_progress = False
 
             texture_maps[map_name] = file_path
-            print(f"  Downloaded: {map_name} (from '{api_key}')")
             current_map += 1
     finally:
         if has_progress:
-            try:
-                wm.progress_end()
-            except:
-                pass
+            try: wm.progress_end()
+            except: pass
 
-    if not texture_maps:
-        raise ValueError(f"No texture maps found for resolution '{resolution}'")
-
-    # Create material (ALWAYS)
+    # Create Material Logic (Existing)
+    # ... (Rest of logic is cleaner to keep similar but condensed)
+    
     mat_name = f"{asset_id}_material"
     mat = bpy.data.materials.get(mat_name)
     if not mat:
@@ -412,20 +469,15 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
     links = mat.node_tree.links
     nodes.clear()
 
-    # Create Principled BSDF
     bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
     bsdf.location = (0, 0)
 
-    # Create output node
     output = nodes.new(type="ShaderNodeOutputMaterial")
     output.location = (300, 0)
-
-    # Link BSDF to output
     links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 
     y_offset = 300
 
-    # Helper to load image
     def load_image_node(path, label, x, y, is_data=True):
         try:
             img = bpy.data.images.load(path)
@@ -433,166 +485,139 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
             node.image = img
             node.label = label
             node.location = (x, y)
-            if is_data:
-                node.image.colorspace_settings.name = "Non-Color"
+            if is_data: node.image.colorspace_settings.name = "Non-Color"
             return node
         except Exception as e:
             print(f"Failed to load image {path}: {e}")
             return None
 
-    # Add texture nodes
+    # Diffuse
     if "Diffuse" in texture_maps:
         tex = load_image_node(texture_maps["Diffuse"], "Diffuse", -300, y_offset, is_data=False)
-        if tex:
-            links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        if tex: links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
         y_offset -= 300
 
-    # Handle Roughness (can be standalone or in ARM texture)
+    # Roughness / ARM
     if "Roughness" in texture_maps:
         tex = load_image_node(texture_maps["Roughness"], "Roughness", -300, y_offset, is_data=True)
-        if tex:
-            links.new(tex.outputs["Color"], bsdf.inputs["Roughness"])
+        if tex: links.new(tex.outputs["Color"], bsdf.inputs["Roughness"])
         y_offset -= 300
     elif "ARM" in texture_maps:
-        # ARM texture: R=AO, G=Roughness, B=Metalness
         tex = load_image_node(texture_maps["ARM"], "ARM", -600, y_offset, is_data=True)
         if tex:
-            # Separate RGB to extract channels
-            separate = nodes.new(type="ShaderNodeSeparateColor") # Blender 3.3+ uses Separate Color
-            # Fallback for older Blender versions if needed, but 4.0+ uses Separate Color
+            sep = nodes.new(type="ShaderNodeSeparateColor")
+            # Fallback check
             if "Separate Color" not in [n.name for n in bpy.types.ShaderNode.bl_rna.properties['type'].enum_items]:
-                    separate = nodes.new(type="ShaderNodeSeparateRGB")
+                 sep = nodes.new(type="ShaderNodeSeparateRGB")
             
-            separate.location = (-300, y_offset)
-            links.new(tex.outputs["Color"], separate.inputs[0]) # Input is usually index 0 'Image' or 'Color'
-
-            # Green channel = Roughness
-            links.new(separate.outputs["Green"], bsdf.inputs["Roughness"])
-
-            # Blue channel = Metalness
-            links.new(separate.outputs["Blue"], bsdf.inputs["Metallic"])
-
-            # Red channel = AO (we'll handle this separately if no standalone AO)
-            if "AO" not in texture_maps:
-                # Mix AO (red channel) with base color if we have diffuse
-                if "Diffuse" in texture_maps:
-                    mix = nodes.new(type="ShaderNodeMix") # Blender 3.4+ uses Mix Node
-                    mix.data_type = 'RGBA'
-                    mix.blend_type = "MULTIPLY"
-                    mix.inputs[0].default_value = 1.0 # Factor
-                    mix.location = (-150, y_offset + 300)
-
-                    # Find existing diffuse connection
-                    diffuse_source = None
-                    for link in list(links):
-                        if link.to_socket == bsdf.inputs["Base Color"]:
-                            diffuse_source = link.from_socket
-                            links.remove(link)
-                            break
-
-                    if diffuse_source:
-                        links.new(diffuse_source, mix.inputs[6]) # A
-                        links.new(separate.outputs["Red"], mix.inputs[7]) # B
-                        links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
-
+            sep.location = (-300, y_offset)
+            links.new(tex.outputs["Color"], sep.inputs[0])
+            links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
+            links.new(sep.outputs["Blue"], bsdf.inputs["Metallic"])
+            
+            if "AO" not in texture_maps and "Diffuse" in texture_maps:
+                 mix = nodes.new(type="ShaderNodeMix")
+                 mix.data_type = 'RGBA'
+                 mix.blend_type = "MULTIPLY"
+                 mix.inputs[0].default_value = 1.0
+                 mix.location = (-150, y_offset + 300)
+                 
+                 # Hook up
+                 # Find existing diffuse link
+                 for link in list(links):
+                      if link.to_socket == bsdf.inputs["Base Color"]:
+                           links.new(link.from_socket, mix.inputs[6])
+                           links.remove(link)
+                           break
+                 links.new(sep.outputs["Red"], mix.inputs[7])
+                 links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
         y_offset -= 300
 
-    # Normal map
+    # Normal / Bump
     if "Normal" in texture_maps:
-        tex = load_image_node(texture_maps["Normal"], "Normal", -600, y_offset, is_data=True)
-        if tex:
-            normal_map = nodes.new(type="ShaderNodeNormalMap")
-            normal_map.location = (-300, y_offset)
-            links.new(tex.outputs["Color"], normal_map.inputs["Color"])
-            links.new(normal_map.outputs["Normal"], bsdf.inputs["Normal"])
-        y_offset -= 300
-
-    # Bump map (alterMCP to normal map)
+         tex = load_image_node(texture_maps["Normal"], "Normal", -600, y_offset, is_data=True)
+         if tex:
+              nmap = nodes.new(type="ShaderNodeNormalMap")
+              nmap.location = (-300, y_offset)
+              links.new(tex.outputs["Color"], nmap.inputs["Color"])
+              links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+         y_offset -= 300
     elif "Bump" in texture_maps:
-        tex = load_image_node(texture_maps["Bump"], "Bump", -600, y_offset, is_data=True)
-        if tex:
-            bump_node = nodes.new(type="ShaderNodeBump")
-            bump_node.location = (-300, y_offset)
-            links.new(tex.outputs["Color"], bump_node.inputs["Height"])
-            links.new(bump_node.outputs["Normal"], bsdf.inputs["Normal"])
-        y_offset -= 300
+         tex = load_image_node(texture_maps["Bump"], "Bump", -600, y_offset, is_data=True)
+         if tex:
+              bump = nodes.new(type="ShaderNodeBump")
+              bump.location = (-300, y_offset)
+              links.new(tex.outputs["Color"], bump.inputs["Height"])
+              links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+         y_offset -= 300
 
+    # Displacement
     if "Displacement" in texture_maps:
-        tex = load_image_node(texture_maps["Displacement"], "Displacement", -300, y_offset, is_data=True)
-        if tex:
-            disp = nodes.new(type="ShaderNodeDisplacement")
-            disp.location = (0, -300)
-            links.new(tex.outputs["Color"], disp.inputs["Height"])
-            links.new(disp.outputs["Displacement"], output.inputs["Displacement"])
-            mat.cycles.displacement_method = "DISPLACEMENT"
-        y_offset -= 300
+         tex = load_image_node(texture_maps["Displacement"], "Displacement", -300, y_offset, is_data=True)
+         if tex:
+              disp = nodes.new(type="ShaderNodeDisplacement")
+              disp.location = (0, -300)
+              links.new(tex.outputs["Color"], disp.inputs["Height"])
+              links.new(disp.outputs["Displacement"], output.inputs["Displacement"])
+              mat.cycles.displacement_method = "DISPLACEMENT"
+         y_offset -= 300
 
-    # Handle Metalness (standalone only if not in ARM)
+    # Metalness
     if "Metalness" in texture_maps and "ARM" not in texture_maps:
-        tex = load_image_node(texture_maps["Metalness"], "Metalness", -300, y_offset, is_data=True)
-        if tex:
-            links.new(tex.outputs["Color"], bsdf.inputs["Metallic"])
-        y_offset -= 300
-
-    # Specular map
+         tex = load_image_node(texture_maps["Metalness"], "Metalness", -300, y_offset, is_data=True)
+         if tex: links.new(tex.outputs["Color"], bsdf.inputs["Metallic"])
+         y_offset -= 300
+         
+    # Specular
     if "Specular" in texture_maps:
-        tex = load_image_node(texture_maps["Specular"], "Specular", -300, y_offset, is_data=True)
-        if tex:
-            # Check for Specular input (Blender 4.0+ vs older)
-            if "Specular IOR Level" in bsdf.inputs:
-                    links.new(tex.outputs["Color"], bsdf.inputs["Specular IOR Level"])
-            elif "Specular" in bsdf.inputs:
-                    links.new(tex.outputs["Color"], bsdf.inputs["Specular"])
-        y_offset -= 300
+         tex = load_image_node(texture_maps["Specular"], "Specular", -300, y_offset, is_data=True)
+         if tex:
+              if "Specular IOR Level" in bsdf.inputs:
+                   links.new(tex.outputs["Color"], bsdf.inputs["Specular IOR Level"])
+              elif "Specular" in bsdf.inputs:
+                   links.new(tex.outputs["Color"], bsdf.inputs["Specular"])
+         y_offset -= 300
 
+    # AO (Standalone)
     if "AO" in texture_maps:
-        # AO needs to be mixed with base color
-        tex = load_image_node(texture_maps["AO"], "AO", -600, y_offset, is_data=True)
-        if tex:
-            # Create Mix Node
-            mix = nodes.new(type="ShaderNodeMix")
-            mix.data_type = 'RGBA'
-            mix.blend_type = "MULTIPLY"
-            mix.inputs[0].default_value = 1.0
-            mix.location = (-150, y_offset)
+         tex = load_image_node(texture_maps["AO"], "AO", -600, y_offset, is_data=True)
+         if tex:
+              mix = nodes.new(type="ShaderNodeMix")
+              mix.data_type = 'RGBA'
+              mix.blend_type = "MULTIPLY"
+              mix.inputs[0].default_value = 1.0
+              mix.location = (-150, y_offset)
+              
+              for link in list(links):
+                   if link.to_socket == bsdf.inputs["Base Color"]:
+                        links.new(link.from_socket, mix.inputs[6])
+                        links.remove(link)
+                        break
+              links.new(tex.outputs["Color"], mix.inputs[7])
+              links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
 
-            # Find existing diffuse connection
-            diffuse_source = None
-            for link in list(links):
-                if link.to_socket == bsdf.inputs["Base Color"]:
-                    diffuse_source = link.from_socket
-                    links.remove(link)
-                    break
-
-            if diffuse_source:
-                links.new(diffuse_source, mix.inputs[6]) # A
-                links.new(tex.outputs["Color"], mix.inputs[7]) # B
-                links.new(mix.outputs["Result"], bsdf.inputs["Base Color"])
-
-    # Apply to active object if one exists
+    # Apply to object
     obj = bpy.context.active_object
     if obj and obj.type == "MESH":
-        if obj.data.materials:
-            obj.data.materials[0] = mat
-        else:
-            obj.data.materials.append(mat)
-
-        return {
-            "success": True,
-            "texture_maps": texture_maps,
-            "asset_id": asset_id,
-            "material_name": mat_name,
-            "file_path": texture_maps.get("Diffuse") or list(texture_maps.values())[0], # Legacy/Consistency helper
-            "message": f"Downloaded and created material '{mat_name}'. Assigned to active object: {obj.name}"
-        }
-
+         if obj.data.materials: obj.data.materials[0] = mat
+         else: obj.data.materials.append(mat)
+         
+         return {
+             "success": True, 
+             "texture_maps": texture_maps, 
+             "asset_id": asset_id,
+             "material_name": mat_name,
+             "file_path": texture_maps.get("Diffuse") or list(texture_maps.values())[0],
+             "message": f"Downloaded texture set '{asset_id}' ({resolution}). Applied to {obj.name}."
+         }
+         
     return {
-        "success": True,
-        "texture_maps": texture_maps,
-        "asset_id": asset_id,
-        "material_name": mat_name,
-        "resolution": resolution,
-        "message": f"Downloaded and created material '{mat_name}'. No active mesh to apply to."
+         "success": True,
+         "texture_maps": texture_maps,
+         "asset_id": asset_id,
+         "material_name": mat_name,
+         "resolution": resolution,
+         "message": f"Downloaded texture set '{asset_id}' ({resolution}). Material created but no active mesh selected."
     }
 
 
@@ -608,18 +633,6 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
     """
     # Get asset info to find download URL
     api_url = f"https://api.polyhaven.com/files/{asset_id}"
-
-    with httpx.Client() as client:
-        response = client.get(api_url, timeout=10.0)
-        # Check for 404
-        if response.status_code == 404:
-            raise ValueError(f"Asset '{asset_id}' not found on PolyHaven.")
-        response.raise_for_status()
-        files = response.json()
-
-    # Normalize format name
-    format_lower = file_format.lower()
-    
     # Aliases (PolyHaven typically uses 'gltf' key for both)
     if format_lower == "glb": 
         format_lower = "gltf"
@@ -827,7 +840,11 @@ def register():
     tool_registry.register_tool(
         "search_polyhaven_assets",
         search_polyhaven_assets,
-        "Search PolyHaven (HDRIs, textures, models). Returns a dict with 'assets' (list of {id, name, categories}) and 'count'.",
+        (
+            "Search for HDRIs, textures, or models on PolyHaven.\n"
+            "RETURNS: {'assets': [{'id': '...', 'name': '...', 'categories': [...]}, ...]}\n"
+            "USAGE: Pass `asset_type` (hdri, texture, model) and `query` string."
+        ),
         {
             "type": "object",
             "properties": {
@@ -857,7 +874,11 @@ def register():
     tool_registry.register_tool(
         "get_polyhaven_asset_info",
         get_polyhaven_asset_info,
-        "Get detailed info about a PolyHaven asset (including available resolutions).",
+        (
+            "Get detailed info including available resolutions for an asset.\n"
+            "RETURNS: {'info': {'name': '...', 'files': {...}}}\n"
+            "USAGE: Use this to check if '4k' or '8k' is available before downloading."
+        ),
         {
             "type": "object",
             "properties": {
@@ -877,7 +898,14 @@ def register():
     tool_registry.register_tool(
         "download_polyhaven",
         download_polyhaven,
-        "Download from PolyHaven (hdri, texture, model). Requires 'asset_type' and 'asset_id'. 'resolution' applies to hdri/texture; 'file_format' applies to hdri/model (auto if omitted).",
+        (
+            "Download and Import an asset from PolyHaven.\n"
+            "USAGE:\n"
+            "- HDRI: `asset_type='hdri'`, sets World Background.\n"
+            "- Texture: `asset_type='texture'`, applies Material to Active Object.\n"
+            "- Model: `asset_type='model'`, imports objects.\n"
+            "Pass `resolution='2k'` (default) or higher if needed."
+        ),
         {
             "type": "object",
             "properties": {

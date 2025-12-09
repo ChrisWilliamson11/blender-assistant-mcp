@@ -34,7 +34,7 @@ class TestSystemPromptHints(unittest.TestCase):
         ]
         
         self.tool_manager = ToolManager()
-        self.tool_manager.get_enabled_tools = MagicMock(return_value={"execute_code", "assistant_help"})
+        self.tool_manager.get_enabled_tools = MagicMock(return_value={"execute_code", "sdk_help"})
         
     def test_hints_format(self):
         """Verify hints are grouped by namespace and hide signatures."""

@@ -196,10 +196,7 @@ class AssistantSession:
         self.tool_queue: List[ToolCall] = []
         self.state = "IDLE" # IDLE, THINKING, EXECUTING, DONE
         self.last_error = None
-        
-
-
-        # spawn_agent and finish_task are now registered in blender_assistant_mcp.tools.system_tools
+        self.current_task_state = ""
 
     def add_message(self, role: str, content: str, name: str = None, images: List[str] = None, tool_calls: List[Dict] = None):
         """Add a message to history."""
@@ -212,7 +209,13 @@ class AssistantSession:
             msg["tool_calls"] = tool_calls
         self.history.append(msg)
         
-        # Prune history if too long (simple sliding window)
+        # Trigger Gradient Compression if history gets long
+        if len(self.history) > 20:
+            self.history = self.memory_manager.compact_history(
+                self.history, 
+                llm_client=self.agent_tools.llm_client
+            )
+        # Fallback pruning
         if len(self.history) > 50:
             self.history = self.history[-50:]
 
@@ -225,22 +228,25 @@ class AssistantSession:
         # Sdk Hints = Allowed - Enabled
         sdk_hints = self.tool_manager.get_system_prompt_hints(enabled_tools, allowed_tools=allowed_tools)
         
-        memory_context = self.memory_manager.get_context()
-        if not memory_context:
-            memory_context = "(No memories yet)"
+        memory_context = self.memory_manager.get_context() or "(No memories yet)"
         
         # Check for scene changes
         raw_changes = self.scene_watcher.consume_changes()
-        if raw_changes:
-            scene_context = f"Scene Changes (Since last turn):\n{raw_changes}"
-        else:
-            scene_context = "Scene Changes: (no scene changes since last turn)"
+        scene_context = f"Scene Changes (Since last turn):\n{raw_changes}" if raw_changes else "Scene Changes: (no scene changes since last turn)"
+
+        # Lean Protocol Strategy
+        include_protocol = len(self.history) <= 1
+        protocol_section = self._load_protocol() if include_protocol else "Refer to protocol for behavioral rules."
 
         return f"""You are the Manager Agent (The "Brain").
 
         GOAL: Plan, delegate, and track complex Blender tasks. If the task is very simple (a 1-liner) complete it yourself with execute_code & bpy.
         When using python for simple tasks, "Inline Code Execution" is available for efficiency. Feel free to write Python blocks (` ```python ... ``` `) directly in your response to run quick checks or simple actions without formal tool calls.
         Multiple code blocks will be processed one after the other, and the execution environment maintains a persistant state, so you could define a function in one code block then run it later from another for a real free-form thinking/coding experience.
+        
+        CURRENT TASK STATUS:
+        {self.current_task_state if self.current_task_state else "(No active task state)"}
+
         CONTEXT:
         - Memory: {memory_context}
         - {scene_context}
@@ -248,14 +254,15 @@ class AssistantSession:
         - **User**: The human manager.
         - **Manager (You)**: The planner.
         - **Task Agent**: (Role: `TASK_AGENT`) The worker. Use `spawn_agent(role="TASK_AGENT", ...)` for: **Web Search**, **Downloading Images**, **PolyHaven/Sketchfab Assets**, and rigorous Blender operations.
-        - **Completion Agent**: (Role: `COMPLETION_AGENT`) Task verifier. Call this to check if user request is satisfied.
-        - **SCENE_UPDATES**: The scene watcher. This is a stream of changes to the scene.
+        - **Completion Agent**: (Role: `COMPLETION_AGENT`) The verifier. Use `spawn_agent(role="COMPLETION_AGENT", ...)` to verify your work.
 
-        MEMORY
-        {memory_context}
+        MCP TOOLS:
+        {json.dumps(list(enabled_tools), indent=2)}
+        
+        {sdk_hints}
 
         PROTOCOL & BEHAVIORAL RULES
-        {self._load_protocol()}"""
+        {protocol_section}"""
 
     def _load_protocol(self) -> str:
         """Load the agentic protocol from protocol.md."""
@@ -273,21 +280,15 @@ class AssistantSession:
         return "Follow standard coding best practices."
 
     def get_model_name_from_prefs(self) -> Optional[str]:
-        """Fetch the currently selected model from Blender preferences."""
-        import bpy
+        """Get the model name from preferences."""
         try:
-            # We need to get the package name, but __package__ might not be available here directly.
-            # We can try to guess or use a hardcoded name if imported relatively
-            # Or assume standard name if we are consistent.
-            # Re-using the logic from __init__ (simplified)
-            pkg = __name__.split(".")[0]
-            prefs = bpy.context.preferences.addons[pkg].preferences
-            return getattr(prefs, "model_file", self.model_name)
+            import bpy
+            prefs = bpy.context.preferences.addons[__package__].preferences
+            return prefs.model_file
         except Exception:
-             # Fallback to the one passed in Init if prefs fail, or None
-             return self.model_name
-             
-    def process_response(self, response: Dict[str, Any], enabled_tools: set) -> List[ToolCall]:
+            return None
+
+    def process_response(self, response: Dict[str, Any], enabled_tools: set) -> tuple[List[ToolCall], str]:
         """Process a raw response from the LLM."""
         # Extract thinking/content for history
         message = response.get("message", {})
@@ -296,8 +297,8 @@ class AssistantSession:
         tool_calls = message.get("tool_calls", [])
         
         if thinking:
-            # We don't add thinking to history to save context,
-            pass
+            # Add thinking to history with special role for UI visibility choice
+            self.add_message("thinking", thinking)
             
         # Parse tools
         calls = ResponseParser.parse(response)
@@ -337,7 +338,7 @@ class AssistantSession:
                 print(f"[Session] Warning: Tool '{call.tool}' not enabled or unknown.")
                 self.add_message(
                     "user", 
-                    f"SYSTEM ERROR: Tool '{call.tool}' is not a MCP tool. You must use the Python SDK via `execute_code` instead. Check `assistant_help` for the correct SDK method signature."
+                    f"SYSTEM ERROR: Tool '{call.tool}' is not a MCP tool. You must use the Python SDK via `execute_code` instead. Check `sdk_help` for the correct SDK method signature."
                 )
                 
         return valid_calls, thinking

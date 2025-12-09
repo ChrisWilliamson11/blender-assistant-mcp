@@ -170,7 +170,11 @@ def register():
     tool_registry.register_tool(
         "get_selection",
         get_selection,
-        "Get the list of currently selected objects in Blender",
+        (
+            "Get the list of currently selected objects.\n"
+            "RETURNS: {'selected_objects': ['Cube', ...], 'count': 1}\n"
+            "USAGE: Use to verify what acts as input for subsequent operations."
+        ),
         {
             "type": "object",
             "properties": {},
@@ -182,7 +186,11 @@ def register():
     tool_registry.register_tool(
         "get_active",
         get_active,
-        "Get the currently active object in Blender",
+        (
+            "Get the currently active object (highlighted in yellow).\n"
+            "RETURNS: {'active_object': 'Cube', 'type': 'MESH'}\n"
+            "USAGE: Many operators apply *only* to the active object."
+        ),
         {
             "type": "object",
             "properties": {},
@@ -194,7 +202,10 @@ def register():
     tool_registry.register_tool(
         "set_selection",
         set_selection,
-        "Set the selection to specific objects by name",
+        (
+            "Set the selection to specific objects by name.\n"
+            "USAGE: Pass `object_names=['Cube', 'Sphere']`. Clears previous selection."
+        ),
         {
             "type": "object",
             "properties": {
@@ -212,7 +223,10 @@ def register():
     tool_registry.register_tool(
         "set_active",
         set_active,
-        "Set the active object by name",
+        (
+            "Set the active object by name (must be visible).\n"
+            "USAGE: Pass `object_name='Cube'`. Ensures object is also selected."
+        ),
         {
             "type": "object",
             "properties": {
@@ -229,7 +243,11 @@ def register():
     tool_registry.register_tool(
         "select_by_type",
         select_by_type,
-        "Select all objects of a specific type (MESH, CURVE, LIGHT, CAMERA, etc.)",
+        (
+            "Select all objects of a specific type.\n"
+            "USAGE: Pass `object_type='MESH'` or 'LIGHT', 'CAMERA'. Useful for batch operations.\n"
+            "RETURNS: List of selected names."
+        ),
         {
             "type": "object",
             "properties": {

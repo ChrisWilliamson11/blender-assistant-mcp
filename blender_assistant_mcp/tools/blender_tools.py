@@ -1691,143 +1691,7 @@ def delete_collection(collection_name: str, delete_objects: bool = False) -> dic
         return {"error": f"Failed to delete collection: {str(e)}"}
 
 
-def assistant_help(tool: str = "", tools: list | None = None, **kwargs) -> dict:
-    """Return usage information for assistant_sdk tools.
 
-    Can look up tools by alias (e.g. "polyhaven.search") or namespace (e.g. "assistant_sdk.polyhaven").
-    Supports multiple lookups and fuzzy matching.
-    """
-    try:
-        # Build list of requested queries
-        queries: list[str] = []
-        if tools and isinstance(tools, (list, tuple)):
-            queries.extend([str(t).strip() for t in tools if str(t).strip()])
-        if tool and str(tool).strip():
-            queries.append(str(tool).strip())
-
-        if not queries:
-            return {"error": "Missing 'tool' or 'tools' parameter"}
-
-        # Define the knowledge base of SDK tools (Manual Overrides & Virtual Tools)
-        # Format: alias -> {sdkUsage, notes, returns?}
-        sdk_docs = {
-            # Virtual / Workflow items (Not real tools)
-            "web.images_workflow": {
-                "workflow": [
-                    "# 3-STEP WORKFLOW for downloading web images:",
-                    "1. results = assistant_sdk.web.search(query='kittens')  # Get pages about kittens",
-                    "2. images = assistant_sdk.web.extract_images(results['results'][0]['url'])  # Extract image URLs",
-                    "3. assistant_sdk.web.download_image(images['images'][0])  # Download first image",
-                ],
-                "notes": "Multi-step process: SEARCH for pages → EXTRACT image URLs → DOWNLOAD the image.",
-            },
-            # Common aliases
-            "search": "polyhaven.search",
-            "download": "polyhaven.download",
-            "scene": "blender.get_scene_info",
-            "info": "blender.get_object_info",
-        }
-
-        # Get all registered tools dynamically
-        all_tools = tool_registry.get_tools_list()
-        results = []
-
-        for q in queries:
-            # Normalize query: remove 'assistant_sdk.' prefix
-            clean_q = q.replace("assistant_sdk.", "").lower()
-            
-            # Check manual docs first (for workflows/aliases)
-            if clean_q in sdk_docs:
-                entry = sdk_docs[clean_q]
-                # If it's an alias string, resolve it
-                if isinstance(entry, str):
-                    clean_q = entry # Resolve alias and continue to dynamic lookup
-                else:
-                    # It's a virtual tool/workflow
-                    results.append({
-                        "tool": clean_q,
-                        "sdkUsage": entry.get("sdkUsage", "N/A"),
-                        "notes": entry.get("notes", ""),
-                        "returns": entry.get("returns", "dict"),
-                        "workflow": entry.get("workflow", None)
-                    })
-                    continue
-
-            # Split by slash if present (e.g. "polyhaven.search/download")
-            sub_queries = clean_q.split("/")
-            
-            for sub_q in sub_queries:
-                sub_q = sub_q.strip()
-                if not sub_q:
-                    continue
-
-                # Handle namespace.tool_name (e.g., polyhaven.download_polyhaven -> download_polyhaven)
-                query_parts = sub_q.split(".")
-                query_tool_name = query_parts[-1]
-                
-                found_for_query = False
-                
-                for t in all_tools:
-                    t_name = t["name"]
-                    t_cat = t.get("category", "Other").lower()
-                    
-                    # Check for match
-                    is_match = False
-                    
-                    # 1. Exact match on tool name
-                    if query_tool_name == t_name.lower():
-                        is_match = True
-                    
-                    # 2. Namespace match (e.g. "polyhaven" matches all tools in PolyHaven category)
-                    elif query_tool_name == t_cat:
-                        is_match = True
-                        
-                    # 3. Substring match (if query is specific enough)
-                    elif len(query_tool_name) > 3 and query_tool_name in t_name.lower():
-                        is_match = True
-                        
-                    if is_match:
-                        # Format usage string
-                        schema = t["inputSchema"]
-                        props = schema.get("properties", {})
-                        args_list = []
-                        for prop_name, prop_info in props.items():
-                            arg_str = f"{prop_name}"
-                            if "default" in prop_info:
-                                arg_str += f"={repr(prop_info['default'])}"
-                            args_list.append(arg_str)
-                        
-                        # Construct namespace for usage (e.g. assistant_sdk.polyhaven.download_polyhaven)
-                        # We use the category as the namespace
-                        usage = f"assistant_sdk.{t_cat}.{t_name}({', '.join(args_list)})"
-                        
-                        results.append({
-                            "tool": t_name,
-                            "sdkUsage": usage,
-                            "notes": t["description"],
-                            "returns": "Dict (see description)",
-                            "category": t_cat
-                        })
-                        found_for_query = True
-                
-                if not found_for_query:
-                    # No match found
-                    pass
-
-        # Remove duplicates
-        unique_results = []
-        seen = set()
-        for r in results:
-            key = r["sdkUsage"]
-            if key not in seen:
-                seen.add(key)
-                unique_results.append(r)
-
-        return {"results": unique_results}
-
-    except Exception as e:
-        import traceback
-        return {"error": f"Help failed: {str(e)}", "traceback": traceback.format_exc()}
 
 
 def register():
@@ -1991,12 +1855,16 @@ def register():
         category="Blender",
     )
 
-    # move_to_collection
 
+
+    # move_to_collection
     tool_registry.register_tool(
         "move_to_collection",
         move_to_collection,
-        "Move objects to a collection; can create the target when missing.",
+        (
+            "Move objects to a collection (create target if missing).\n"
+            "USAGE: Pass `object_names=['Cube']` and `collection_name='Target'`. Use `create_if_missing=True` to be safe."
+        ),
         {
             "type": "object",
             "properties": {
@@ -2025,11 +1893,14 @@ def register():
         category="Blender",
     )
 
-    # set_collection_color (now supports batch via 'collection_names')
+    # set_collection_color
     tool_registry.register_tool(
         "set_collection_color",
         set_collection_color,
-        "Set collection color tag (Blender 4.2+). Accepts single name or list.",
+        (
+            "Set collection color tag (Blender 4.2+).\n"
+            "USAGE: Pass `collection_names=['ColA', 'ColB']` and `color_tag='COLOR_01'`."
+        ),
         {
             "type": "object",
             "properties": {
@@ -2064,10 +1935,14 @@ def register():
         category="Blender",
     )
 
+    # delete_collection
     tool_registry.register_tool(
         "delete_collection",
         delete_collection,
-        "Delete a collection. Optionally delete all objects within it.",
+        (
+            "Delete a collection.\n"
+            "USAGE: Set `delete_objects=True` to also delete contained objects, otherwise they are unlinked."
+        ),
         {
             "type": "object",
             "properties": {
@@ -2086,225 +1961,15 @@ def register():
         category="Blender",
     )
 
-    # capture_viewport_for_vision (vision models only)
-
-    tool_registry.register_tool(
-        "capture_viewport_for_vision",
-        capture_viewport_for_vision,
-        "Synchronously capture the current viewport and run a vision model to answer a question about the scene. Returns only the textual description and metadata (no image).",
-        {
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "What to analyze in the captured viewport image (e.g., 'Are there 9 cubes? Label them.').",
-                },
-                "max_size": {
-                    "type": "integer",
-                    "description": "Max width/height in pixels for the captured image",
-                    "default": 1024,
-                },
-                "vision_model": {
-                    "type": "string",
-                    "description": "Optional override for the vision model name (uses default from preferences if omitted)",
-                },
-                "timeout_s": {
-                    "type": "integer",
-                    "description": "Max seconds to wait for vision analysis before timing out",
-                    "default": 15,
-                    "minimum": 1,
-                    "maximum": 120,
-                },
-            },
-            "required": ["question"],
-        },
-        category="Vision",
-    )
-
-    # Collection tools
-
-    # list_collections
-
-    tool_registry.register_tool(
-        "list_collections",
-        list_collections,
-        "List all collections with hierarchy and object counts",
-        {"type": "object", "properties": {}, "required": []},
-        category="Blender",
-    )
-
-    # get_collection_info
-
-    tool_registry.register_tool(
-        "get_collection_info",
-        get_collection_info,
-        "Get info about a specific collection (objects and children)",
-        {
-            "type": "object",
-            "properties": {
-                "collection_name": {
-                    "type": "string",
-                    "description": "Collection name",
-                }
-            },
-            "required": ["collection_name"],
-        },
-        category="Blender",
-    )
-
-    # create_collection (supports batch via 'collections')
-
-    tool_registry.register_tool(
-        "create_collection",
-        create_collection,
-        "Create one or more collections. Batch via 'collections'.",
-        {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Single collection name"},
-                "parent": {
-                    "type": "string",
-                    "description": "Parent for single collection (omit for scene root)",
-                },
-                "collections": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "parent": {"type": "string"},
-                        },
-                        "required": ["name"],
-                    },
-                    "description": "List of {name, parent?}",
-                },
-            },
-            "required": [],
-        },
-        category="Blender",
-    )
-
-    # move_to_collection
-
-    tool_registry.register_tool(
-        "move_to_collection",
-        move_to_collection,
-        "Move objects to a collection; can create the target when missing.",
-        {
-            "type": "object",
-            "properties": {
-                "object_names": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Object names to move",
-                },
-                "collection_name": {
-                    "type": "string",
-                    "description": "Target collection name",
-                },
-                "unlink_from_others": {
-                    "type": "boolean",
-                    "description": "Unlink from other collections",
-                    "default": True,
-                },
-                "create_if_missing": {
-                    "type": "boolean",
-                    "description": "Create target if missing",
-                    "default": True,
-                },
-            },
-            "required": ["object_names", "collection_name"],
-        },
-        category="Blender",
-    )
-
-    # set_collection_color (now supports batch via 'collection_names')
-    tool_registry.register_tool(
-        "set_collection_color",
-        set_collection_color,
-        "Set collection color tag (Blender 4.2+). Accepts single name or list.",
-        {
-            "type": "object",
-            "properties": {
-                "collection_name": {
-                    "type": "string",
-                    "description": "Single collection name",
-                },
-                "collection_names": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of collections",
-                },
-                "color_tag": {
-                    "type": "string",
-                    "description": "COLOR_01..COLOR_08 or NONE",
-                    "enum": [
-                        "COLOR_01",
-                        "COLOR_02",
-                        "COLOR_03",
-                        "COLOR_04",
-                        "COLOR_05",
-                        "COLOR_06",
-                        "COLOR_07",
-                        "COLOR_08",
-                        "NONE",
-                    ],
-                    "default": "COLOR_01",
-                },
-            },
-            "required": [],
-        },
-        category="Blender",
-    )
-
-    tool_registry.register_tool(
-        "delete_collection",
-        delete_collection,
-        "Delete a collection. Optionally delete all objects within it.",
-        {
-            "type": "object",
-            "properties": {
-                "collection_name": {
-                    "type": "string",
-                    "description": "Collection to delete",
-                },
-                "delete_objects": {
-                    "type": "boolean",
-                    "description": "Also delete objects",
-                    "default": False,
-                },
-            },
-            "required": ["collection_name"],
-        },
-        category="Blender",
-    )
-
-    tool_registry.register_tool(
-        "assistant_help",
-        assistant_help,
-        "Return JSON Schemas for one or more assistant_sdk tool methods (e.g., 'polyhaven.search').",
-        {
-            "type": "object",
-            "properties": {
-                "tool": {
-                    "type": "string",
-                    "description": "Single SDK method name or MCP tool name (e.g., 'polyhaven.search', 'get_scene_info')",
-                },
-                "tools": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of SDK method names or MCP tool names",
-                },
-            },
-            "required": [],
-        },
-        category="Info",
-    )
-
+    # inspect_data
     tool_registry.register_tool(
         "inspect_data",
         inspect_data,
-        "Introspect a Blender data block and return its structure (AST-like). Use this to see properties of an object.",
+        (
+            "Introspect a Blender data block's internal structure.\n"
+            "RETURNS: A JSON representation of the properties.\n"
+            "USAGE: Use this to debug or find property names. e.g. path=\"bpy.data.objects['Cube']\"."
+        ),
         {
             "type": "object",
             "properties": {
@@ -2323,10 +1988,15 @@ def register():
         category="Blender",
     )
 
+    # search_data
     tool_registry.register_tool(
         "search_data",
         search_data,
-        "Search for data blocks matching specific criteria (AST-grep like).",
+        (
+            "Search for data blocks matching specific criteria.\n"
+            "USAGE: Pass `root_path` (e.g. 'bpy.data.objects') and `filter_props` (e.g. {'type': 'MESH'}).\n"
+            "RETURNS: List of matching items with summaries."
+        ),
         {
             "type": "object",
             "properties": {

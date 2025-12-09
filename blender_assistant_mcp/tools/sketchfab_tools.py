@@ -260,7 +260,11 @@ def register():
     tool_registry.register_tool(
         "sketchfab_login",
         sketchfab_login,
-        "Login to Sketchfab using email/password (stores access token in-memory).",
+        (
+            "Login to Sketchfab using email/password.\n"
+            "USAGE: Required before searching or downloading. Stores token in memory.\n"
+            "RETURNS: {'success': True, ...} or error."
+        ),
         {
             "type": "object",
             "properties": {
@@ -276,7 +280,11 @@ def register():
     tool_registry.register_tool(
         "sketchfab_search",
         sketchfab_search,
-        "Search downloadable Sketchfab models via the v3 API (requires login).",
+        (
+            "Search for free downloadable Sketchfab models.\n"
+            "USAGE: Requires login. Query 'car', 'tree', etc.\n"
+            "RETURNS: {'results': [{'uid': '...', 'name': '...', 'user': {...}}, ...]}"
+        ),
         {
             "type": "object",
             "properties": {
@@ -294,7 +302,11 @@ def register():
     tool_registry.register_tool(
         "sketchfab_download_model",
         sketchfab_download_model,
-        "Download a model by UID and optionally import into the current scene (requires login).",
+        (
+            "Download and Import a Sketchfab Model by UID.\n"
+            "USAGE: Find UID via `sketchfab_search`. Imports glTF automatically.\n"
+            "RETURNS: {'success': True, 'imported_objects': ['Object', ...]}"
+        ),
         {
             "type": "object",
             "properties": {

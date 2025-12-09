@@ -22,8 +22,8 @@ from blender_assistant_mcp.tools import blender_tools
 from blender_assistant_mcp.agent_manager import AgentTools
 from blender_assistant_mcp import tool_registry
 
-def test_assistant_help():
-    print("\n=== Testing assistant_help ===")
+def test_sdk_help():
+    print("\n=== Testing sdk_help ===")
     
     # Register some dummy tools to ensure registry is populated (if not already)
     # But we expect real tools to be registered by the system.
@@ -46,26 +46,26 @@ def test_assistant_help():
     
     # Test 1: Exact match with namespace
     print("Test 1: polyhaven.download_polyhaven_texture")
-    res = blender_tools.assistant_help(tool="polyhaven.download_polyhaven_texture")
+    res = blender_tools.sdk_help(tool="polyhaven.download_polyhaven_texture")
     print(json.dumps(res, indent=2))
     assert len(res["results"]) > 0
     assert res["results"][0]["tool"] == "download_polyhaven_texture"
     
     # Test 2: Category match
     print("\nTest 2: polyhaven")
-    res = blender_tools.assistant_help(tool="polyhaven")
+    res = blender_tools.sdk_help(tool="polyhaven")
     print(json.dumps(res, indent=2))
     assert len(res["results"]) >= 1
     
     # Test 3: Substring match
     print("\nTest 3: download_polyhaven")
-    res = blender_tools.assistant_help(tool="download_polyhaven_texture")
+    res = blender_tools.sdk_help(tool="download_polyhaven_texture")
     print(json.dumps(res, indent=2))
     assert len(res["results"]) > 0
 
     # Test 4: Virtual tool (web.images_workflow)
     print("\nTest 4: web.images_workflow")
-    res = blender_tools.assistant_help(tool="web.images_workflow")
+    res = blender_tools.sdk_help(tool="web.images_workflow")
     print(json.dumps(res, indent=2))
     assert len(res["results"]) > 0
     assert "workflow" in res["results"][0]
@@ -82,7 +82,7 @@ def test_assistant_help():
         category="PolyHaven"
     )
     print("\nTest 5: Alias 'search'")
-    res = blender_tools.assistant_help(tool="search")
+    res = blender_tools.sdk_help(tool="search")
     print(json.dumps(res, indent=2))
     assert len(res["results"]) > 0
     assert "search_polyhaven_assets" in res["results"][0]["tool"] or "polyhaven" in res["results"][0]["category"].lower()
@@ -163,7 +163,7 @@ def test_completion_agent():
     assert "Error" not in res
 
 if __name__ == "__main__":
-    test_assistant_help()
+    test_sdk_help()
     # test_verifier_agent()
     test_web_agent()
     test_research_agent()

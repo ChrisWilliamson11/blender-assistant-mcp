@@ -97,10 +97,8 @@ class MemoryManager:
         except Exception as e:
             print(f"Failed to save abstract: {e}")
 
-    def create_abstract(self, session_history: List[Dict[str, str]], model_name: str = "gpt-oss:20b") -> Optional[str]:
+    def create_abstract(self, session_history: List[Dict[str, str]], llm_client: Any = None, model_name: str = "gpt-oss:20b") -> Optional[str]:
         """Generate an abstract from session history using LLM."""
-        from . import ollama_adapter
-        
         if not session_history:
             return None
             
@@ -108,6 +106,8 @@ class MemoryManager:
         history_text = ""
         for msg in session_history:
             role = msg.get("role", "unknown")
+            if role == "thinking":
+                continue # Skip thinking in abstract
             content = msg.get("content", "")
             history_text += f"{role}: {content}\n"
             
@@ -120,15 +120,81 @@ Conversation:
 
 Abstract:"""
 
-        response = ollama_adapter.chat_completion(
-            model_path=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=128
-        )
-        
-        abstract = response.get("content", "").strip()
-        if abstract:
-            self.store_abstract(abstract)
-            return abstract
+        try:
+             # Use injected client if available, else fallback
+             if llm_client:
+                 response = llm_client.chat_completion(
+                    model_path=model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3
+                )
+             else:
+                from . import ollama_adapter
+                response = ollama_adapter.chat_completion(
+                    model_path=model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=128
+                )
+             abstract = response.get("content", "").strip()
+             if abstract:
+                self.store_abstract(abstract)
+                return abstract
+        except Exception:
+             pass
+             
         return None
+
+    def compact_history(self, history: List[Dict[str, str]], llm_client: Any, model_name: str = "gpt-oss:20b") -> List[Dict[str, str]]:
+        """
+        Compress context using 'Gradient Summarization'.
+        
+        Policy:
+        - Trigger: If len(history) > 20.
+        - Preserve: Index 0 (Initial User Request).
+        - Compress: Index 1-11 (Oldest 10 messages after first).
+        - Keep: Index 11+ (Recent context).
+        """
+        if len(history) <= 20:
+            return history
+            
+        print("[MemoryManager] Compressing history (Gradient Summarization)...")
+        
+        first_msg = history[0]
+        to_compress = history[1:11]
+        remaining = history[11:]
+        
+        # Format for summarization
+        chunk_text = ""
+        for msg in to_compress:
+            if msg.get('role') == "thinking":
+                continue
+            chunk_text += f"{msg.get('role')}: {msg.get('content')}\n"
+            
+        prompt = f"""Summarize this segment of the conversation. capture what was attempted and the outcome.
+        
+        Segment:
+        {chunk_text}
+        
+        Summary:"""
+        
+        try:
+            response = llm_client.chat_completion(
+                model_path=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            summary = response.get("content", "").strip()
+        except Exception as e:
+            print(f"[MemoryManager] Compression Failed: {e}")
+            return history # Fail safe
+            
+        summary_msg = {
+            "role": "system", 
+            "content": f"[Previous Context Summary]: {summary}"
+        }
+        
+        # Return new history structure
+        new_history = [first_msg, summary_msg] + remaining
+        print(f"[MemoryManager] Compressed {len(history)} -> {len(new_history)} messages.")
+        return new_history

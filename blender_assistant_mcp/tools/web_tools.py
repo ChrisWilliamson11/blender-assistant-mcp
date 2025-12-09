@@ -988,38 +988,14 @@ def search_image_url(query: str, num_results: int = 5) -> dict:
     }
 
 
-def register():
-    """Register all web tools with the MCP registry."""
-
-    tool_registry.register_tool(
-        "web_search",
-        web_search,
-        "Search the web for information using DuckDuckGo (useful for Blender documentation, tutorials, best practices)",
-        {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query (e.g., 'blender parent objects selection order')",
-                },
-                "num_results": {
-                    "type": "integer",
-                    "description": "Number of results to return (default: 5, max: 10)",
-                    "default": 5,
-                    "minimum": 1,
-                    "maximum": 10,
-                },
-            },
-            "required": ["query"],
-        },
-        category="Web",
-        requires_main_thread=False
-    )
-
     tool_registry.register_tool(
         "search_image_url",
         search_image_url,
-        "Search for direct image URLs related to a query (useful for finding textures or reference images)",
+        (
+            "Search for direct image URLs (good for textures/refs).\n"
+            "USAGE: Query 'brick texture seamless' or 'cat photo'.\n"
+            "RETURNS: List of URL strings."
+        ),
         {
             "type": "object",
             "properties": {
@@ -1042,7 +1018,11 @@ def register():
     tool_registry.register_tool(
         "search_wikimedia_image",
         search_wikimedia_image,
-        "Search Wikimedia Commons for free images and download as texture. Good for: nature, textures, architecture, historical photos. NOT for: modern stock photos, satellite imagery. Use simple search terms like 'wood grain', 'brick wall', 'mountain landscape'.",
+        (
+            "Search Wikimedia Commons (free high-res images).\n"
+            "USAGE: Good for 'nature', 'architecture', 'textures'. Bad for 'modern stock'.\n"
+            "RETURNS: Metadata + optionally downloads and applies as texture immediately if apply_to_active=True."
+        ),
         {
             "type": "object",
             "properties": {
@@ -1065,7 +1045,11 @@ def register():
     tool_registry.register_tool(
         "fetch_webpage",
         fetch_webpage,
-        "Fetch and extract text content from a webpage. Useful for reading articles, documentation, or getting detailed information from search results.",
+        (
+            "Fetch text content from a URL.\n"
+            "USAGE: Use this to read documentation or articles found via `web_search`.\n"
+            "RETURNS: {'text': '...', 'url': '...'}"
+        ),
         {
             "type": "object",
             "properties": {
@@ -1090,7 +1074,11 @@ def register():
     tool_registry.register_tool(
         "extract_image_urls",
         extract_image_urls,
-        "Extract likely content image URLs from a webpage (jpg/png/webp). Filters out tiny/logos/sprites and returns top N.",
+        (
+            "Scrape all image URLs from a specific webpage.\n"
+            "USAGE: Use after `web_search` if you found a gallery page.\n"
+            "RETURNS: List of image URLs found on that page."
+        ),
         {
             "type": "object",
             "properties": {
@@ -1122,7 +1110,10 @@ def register():
     tool_registry.register_tool(
         "download_image_as_texture",
         download_image_as_texture,
-        "Download an image from a URL and optionally apply it as a texture. Images are packed into the .blend file by default.",
+        (
+            "Download an image URL and apply to active object.\n"
+            "USAGE: Pass a direct image URL (jpg/png). Packs into blend file by default."
+        ),
         {
             "type": "object",
             "properties": {

@@ -340,7 +340,7 @@ def _sync_tools_to_json(prefs):
     """Sync tool_config_items checkboxes to schema_tools JSON."""
     import json
 
-    enabled = [t.name for t in prefs.tool_config_items if t.enabled]
+    enabled = [t.name for t in prefs.tool_config_items if t.expose_mcp]
     # Always ensure execute_code is included
     if "execute_code" not in enabled:
         enabled.append("execute_code")
@@ -903,10 +903,10 @@ def _update_tool_enabled(self, context):
 
 class ToolConfigItem(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(name="Tool Name")
-    enabled: bpy.props.BoolProperty(
-        name="Enabled",
+    expose_mcp: bpy.props.BoolProperty(
+        name="Expose MCP",
         default=True,
-        description="Enable this tool in the OpenAI schema",
+        description="Expose this tool to the LLM as a native MCP tool (JSON schema). If disabled, the agent must use the SDK (Python).",
         update=_update_tool_enabled,
     )
     category: bpy.props.StringProperty(name="Category")
@@ -1151,6 +1151,30 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         name="Show Advanced Sampling",
         description="Show/hide advanced sampling options",
         default=False,
+    )
+
+    show_section_ui: bpy.props.BoolProperty(
+        name="Show UI Section",
+        default=True,
+    )
+
+    # UI / Visibility Options
+    show_thinking: bpy.props.BoolProperty(
+        name="Show Thinking",
+        description="Show/hide the internal thought process of the agent",
+        default=True,
+    )
+
+    show_scene_updates: bpy.props.BoolProperty(
+        name="Show Scene Updates",
+        description="Show/hide automated scene change notifications in the chat",
+        default=True,
+    )
+
+    show_tool_outputs: bpy.props.BoolProperty(
+        name="Show Tool/Agent Outputs",
+        description="Show/hide the raw output from tools and sub-agents",
+        default=True,
     )
 
     top_p: bpy.props.FloatProperty(
@@ -1987,6 +2011,19 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         if self.show_section_downloads:
             self._draw_model_downloads(layout)
 
+        # UI / Visibility Options (collapsible)
+        row = layout.row(align=True)
+        row.prop(
+            self,
+            "show_section_ui",
+            text="",
+            icon="TRIA_DOWN" if self.show_section_ui else "TRIA_RIGHT",
+            emboss=False,
+        )
+        row.label(text="UI & Visibility Options", icon="RESTRICT_VIEW_OFF")
+        if self.show_section_ui:
+            self._draw_ui_settings(layout)
+
         # GPU Optimization (collapsible)
         row = layout.row(align=True)
         row.prop(
@@ -2076,6 +2113,19 @@ class AssistantPreferences(bpy.types.AddonPreferences):
 
 
 
+    def _draw_ui_settings(self, layout):
+        """Draw UI visibility settings."""
+        box = layout.box()
+        box.label(text="Message Visibility Control", icon="RESTRICT_VIEW_OFF")
+        
+        col = box.column(align=True)
+        col.prop(self, "show_thinking", text="Show Thinking Process")
+        col.prop(self, "show_scene_updates", text="Show Scene Updates")
+        col.prop(self, "show_tool_outputs", text="Show Tool Details")
+        
+        col.separator()
+        col.label(text="Uncheck these to reduce clutter in the chat.", icon="INFO")
+
     def _draw_api_settings(self, layout):
         """Draw API key settings."""
         box = layout.box()
@@ -2141,11 +2191,18 @@ class AssistantPreferences(bpy.types.AddonPreferences):
                 
                 col = cat_box.column(align=True)
                 for item in sorted(by_category[cat], key=lambda x: x.name):
-                    r = col.row()
-                    if item.name == "execute_code":
+                    r = col.row(align=True)
+                    if item.name == "execute_code" or item.name == 'sdk_help':
                         r.enabled = False # Always enabled
-                    r.prop(item, "enabled", text=item.name)
-                    r.label(text=item.description, icon="INFO")
+                    
+                    # Left side: Tool Name
+                    r.label(text=item.name)
+                    
+                    # Right side: Toggle
+                    if item.expose_mcp:
+                        r.prop(item, "expose_mcp", text="MCP Tool", icon="CHECKBOX_HLT", toggle=True)
+                    else:
+                        r.prop(item, "expose_mcp", text="SDK Only", icon="CHECKBOX_DEHLT", toggle=True)
         else:
             box.label(text="No tools found. Click Refresh.", icon="ERROR")
 
@@ -2175,14 +2232,14 @@ class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
         # Add all registered tools
         for name, tool_data in tool_registry._TOOLS.items():
             # Hide CORE TOOLS from UI (they are auto-injected for Agents)
-            if name in ["execute_code", "assistant_help"]:
+            if name in ["execute_code", "sdk_help"]:
                 continue
                 
             item = prefs.tool_config_items.add()
             item.name = name
             item.category = tool_data.get("category", "Other")
             item.description = tool_data.get("description", "")
-            item.enabled = name in current_enabled or name == "execute_code"
+            item.expose_mcp = name in current_enabled or name == "execute_code"
 
         # Sync to schema_tools
         _sync_tools_to_json(prefs)
@@ -2206,9 +2263,9 @@ class ASSISTANT_OT_toggle_category_tools_prefs(bpy.types.Operator):
             if tool.category == self.category:
                 # Always keep execute_code enabled
                 if tool.name == "execute_code":
-                    tool.enabled = True
+                    tool.expose_mcp = True
                 else:
-                    tool.enabled = self.enable
+                    tool.expose_mcp = self.enable
 
         # Sync to schema_tools
         _sync_tools_to_json(prefs)
@@ -2245,7 +2302,7 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
                 "set_selection",
                 "set_active",
                 "select_by_type",
-                "assistant_help",
+                "sdk_help",
                 "capture_viewport_for_vision",
             ]
         elif self.preset == "core":
@@ -2254,7 +2311,7 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
                 "execute_code",
                 "get_scene_info",
                 "get_object_info",
-                "assistant_help",
+                "sdk_help",
             ]
         elif self.preset == "all":
             # All registered tools
@@ -2267,7 +2324,7 @@ class ASSISTANT_OT_set_tool_preset(bpy.types.Operator):
         # Update checkboxes
         tools_set = set(tools)
         for tool in prefs.tool_config_items:
-            tool.enabled = tool.name in tools_set or tool.name == "execute_code"
+            tool.expose_mcp = tool.name in tools_set or tool.name == "execute_code"
 
         # Sync to schema_tools
         _sync_tools_to_json(prefs)
@@ -2316,7 +2373,7 @@ def register():
                     default_enabled = []
 
                 for name, tool_data in tool_registry._TOOLS.items():
-                    if name in ["execute_code", "assistant_help"]:
+                    if name in ["execute_code", "sdk_help"]:
                         continue
 
                     if name not in existing_names:

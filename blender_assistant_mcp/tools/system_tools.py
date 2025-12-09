@@ -52,7 +52,14 @@ def register():
     tool_registry.register_tool(
         name="spawn_agent",
         func=spawn_agent,
-        description="Delegate a task to a Worker Agent (TASK_AGENT) or Verify completion (COMPLETION_AGENT).",
+        description=(
+            "Delegate a task to a Worker Agent (TASK_AGENT) or Verify completion (COMPLETION_AGENT).\n"
+            "RETURNS: A JSON Report containing 'status' (DONE/INCOMPLETE/ERROR), 'summary', and 'expected_changes'.\n"
+            "BEHAVIOR:\n"
+            "- BLOCKING: This tool waits for the agent to finish and returns the Final Report immediately.\n"
+            "- ERRORS: If status is 'ERROR' or 'INCOMPLETE', read the summary and plan your next step to fix it.\n"
+            "- SYNC: Use the returned 'expected_changes' to update your internal Task List tracking."
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -79,7 +86,11 @@ def register():
     tool_registry.register_tool(
         name="finish_task",
         func=finish_task,
-        description="Signal completion of the assigned task.",
+        description=(
+            "Signal completion of the assigned task.\n"
+            "USAGE: Call this when your objective is fully complete.\n"
+            "RETURNS: {'status': 'DONE', 'summary': '...', 'expected_changes': [...]}"
+        ),
         input_schema={
             "type": "object",
             "properties": {

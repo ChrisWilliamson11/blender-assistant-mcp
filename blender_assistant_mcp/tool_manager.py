@@ -112,7 +112,9 @@ class ToolManager:
         if not tools_by_namespace:
             return ""
 
-        lines = ["SDK CAPABILITIES (Use `assistant_help` to find tools):"]
+        lines = ["SDK CAPABILITIES (Tools available via `execute_code`):"]
+        lines.append("To use these, first call `sdk_help(tool_names=['...'])` to get the signature, then run `assistant_sdk.tool(...)` via `execute_code`.")
+        lines.append("")
         for namespace, tools in sorted(tools_by_namespace.items()):
             # Format: - namespace: tool1(arg), tool2(arg), ...
             tool_list = ", ".join(sorted(tools))
@@ -122,7 +124,7 @@ class ToolManager:
 
     def get_allowed_tools_for_role(self, role: str) -> Set[str]:
         """Get the 'Universe' of tools allowed for a role (ignoring preferences)."""
-        base_set = {"execute_code", "assistant_help"} # Always allowed
+        base_set = {"execute_code", "sdk_help"} # Always allowed
 
         # Universal Memory & RAG Access
         universal_tools = {
@@ -176,7 +178,7 @@ class ToolManager:
         
         # Start with core tools (ALWAYS ENABLED)
         # spawn_agent is CRITICAL for the autonomous loop (Manager only now?), so it must be always enabled.
-        enabled = {"execute_code", "assistant_help", "spawn_agent"}
+        enabled = {"execute_code", "sdk_help", "spawn_agent"}
         
         # If we don't have prefs, usually implies "Show Everything" (or default behavior)
         # But per user request: "Enabled = MCP, Disabled = SDK". 
@@ -185,7 +187,7 @@ class ToolManager:
             return allowed
             
         # Filter by user preferences
-        pref_enabled = {t.name for t in preferences.tool_config_items if t.enabled}
+        pref_enabled = {t.name for t in preferences.tool_config_items if t.expose_mcp}
         
         for tool in allowed:
             if tool in pref_enabled:
@@ -204,7 +206,7 @@ class ToolManager:
 - **ACCESS METHODS**: You have two ways to act:
   1. **MCP Tools**: Call these using your built-in tool calling mechanism, using the format specified (e.g., `get_scene_info`).
   2. **Python Code**: Use `execute_code` to run scripts. Use this for `assistant_sdk.*` methods and raw `bpy` commands.
-- **FINDING TOOLS**: Do not guess tool names. Use `assistant_help` to find SDK methods, `rag_query` for docs, or `search_memory` for past solutions.
+- **FINDING TOOLS**: Do not guess tool names. Use `sdk_help` to find SDK methods (e.g., `sdk_help(tool_names=['web_search', 'polyhaven'])`), `rag_query` for docs, or `search_memory` for past solutions.
 - **SCENE AWARENESS**: 'SCENE UPDATES' provide a SUMMARY of changes (added/modified objects). Use `inspect_data` or `get_scene_info(detailed=True)` to fetch detailed properties (like vertices, modifiers, or custom props) if needed.
 - **CLEANUP**: Keep the scene organized. Use collections to group new objects.
 - **VERIFY**: Always verify your actions.
