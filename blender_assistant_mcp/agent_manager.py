@@ -439,22 +439,16 @@ class AgentTools:
             from .tools import tool_registry
             import bpy
 
-            # 1. Determine Agent Universe
-            universe = self.tool_manager.get_allowed_tools_for_role(role)
-            
-            # 2. Determine User Preferences (MCP Active Tools)
+            # 1. Determine Agent Universe & User Permissions
             prefs = None
             try:
-                addon_name = "blender_assistant_mcp"
-                if addon_name in bpy.context.preferences.addons:
-                    prefs = bpy.context.preferences.addons[addon_name].preferences
-            except: pass
+                # Robustly find preferences (handles Zip vs Extension)
+                prefs = bpy.context.preferences.addons[__package__].preferences
+            except:
+                # Fallback or dev mode
+                pass
             
-            active_mcp_set = self.tool_manager.get_enabled_tools(prefs)
-            
-            # 3. Intersect + Force CORE TOOLS (execute_code, sdk_help)
-            core_tools = {"execute_code", "sdk_help"}
-            injected_tools = universe.intersection(active_mcp_set.union(core_tools))
+            injected_tools = self.tool_manager.get_enabled_tools_for_role(role, preferences=prefs)
             
             # 4. Generate Tool Schemas
             tool_schemas = self.tool_manager.get_openai_tools(injected_tools)

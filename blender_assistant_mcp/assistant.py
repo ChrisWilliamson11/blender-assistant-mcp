@@ -323,17 +323,20 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                             enabled_tools = session.tool_manager.get_enabled_tools_for_role("MANAGER", preferences=prefs)
                         except:
                             enabled_tools = set()
+                        
+                        # Extract usage
+                        usage = self._response.get("usage")
 
-                        tool_calls, thinking = session.process_response(self._response, enabled_tools)
+                        tool_calls, thinking = session.process_response(self._response, enabled_tools, usage=usage)
                         
                         if thinking:
-                            self._add_message("Thinking", thinking)
+                            self._add_message("Thinking", thinking, usage=usage)
                         
                         # Add assistant message to UI
                         msg = self._response.get("message", {})
                         content = msg.get("content", "")
                         if content:
-                            self._add_message("Assistant", content)
+                            self._add_message("Assistant", content, usage=usage)
                             
                         if tool_calls:
                             session.tool_queue = tool_calls

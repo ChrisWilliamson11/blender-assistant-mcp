@@ -293,7 +293,7 @@ class AssistantSession:
         except Exception:
             return None
 
-    def process_response(self, response: Dict[str, Any], enabled_tools: set) -> tuple[List[ToolCall], str]:
+    def process_response(self, response: Dict[str, Any], enabled_tools: set, usage: Dict = None) -> tuple[List[ToolCall], str]:
         """Process a raw response from the LLM."""
         # Extract thinking/content for history
         message = response.get("message", {})
@@ -303,7 +303,7 @@ class AssistantSession:
         
         if thinking:
             # Add thinking to history with special role for UI visibility choice
-            self.add_message("thinking", thinking)
+            self.add_message("thinking", thinking, usage=usage)
             
         # Parse tools
         calls = ResponseParser.parse(response)
@@ -313,7 +313,8 @@ class AssistantSession:
             self.add_message(
                 "assistant", 
                 content, 
-                tool_calls=message.get("tool_calls") # Original MCP calls for history
+                tool_calls=message.get("tool_calls"), # Original MCP calls for history
+                usage=usage
             )
             
         valid_calls = []

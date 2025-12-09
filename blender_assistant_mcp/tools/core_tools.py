@@ -173,9 +173,17 @@ def sdk_help(tool_name: str = None, tool_names: list[str] = None):
         # Category Mode
         if not found_tool and target_category:
             import bpy
-            prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
+            # Robust package name resolution
+            package_name = __package__
+            if ".tools" in package_name:
+                package_name = package_name.partition(".tools")[0]
             
-            # Build set of exposed tools
+            try:
+                prefs = bpy.context.preferences.addons[package_name].preferences
+            except:
+                # Fallback for legacy parsing if needed, but the above should cover Extensions & Zip
+                prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
+
             exposed_tools = {t.name for t in prefs.tool_config_items if t.expose_mcp}
             # Always expose core tools
             exposed_tools.add("execute_code")
@@ -233,7 +241,14 @@ def sdk_help(tool_name: str = None, tool_names: list[str] = None):
             
             # Check exposure status for clearer hint
             import bpy
-            prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
+            package_name = __package__
+            if ".tools" in package_name:
+                package_name = package_name.partition(".tools")[0]
+            try:
+                prefs = bpy.context.preferences.addons[package_name].preferences
+            except:
+                prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
+
             is_exposed = False
             for t in prefs.tool_config_items:
                 if t.name == tool_name_key:
@@ -301,7 +316,13 @@ def sdk_help(tool_name: str = None, tool_names: list[str] = None):
     # LIST CATEGORIES (Default)
     # LIST CATEGORIES (Default)
     import bpy
-    prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
+    package_name = __package__
+    if ".tools" in package_name:
+        package_name = package_name.partition(".tools")[0]
+    try:
+        prefs = bpy.context.preferences.addons[package_name].preferences
+    except:
+        prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
     exposed_tools = {t.name for t in prefs.tool_config_items if t.expose_mcp}
     exposed_tools.add("execute_code")
     exposed_tools.add("sdk_help")

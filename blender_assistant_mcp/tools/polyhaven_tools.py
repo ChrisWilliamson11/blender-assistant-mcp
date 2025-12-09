@@ -152,7 +152,7 @@ def _solve_resolution(available_res: list, target_res: str) -> str:
     if not available_res:
         return target_res
         
-    target = target_res.lower()
+    target = str(target_res).lower()
     if target in available_res:
         return target
         
@@ -775,29 +775,24 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
 
 
 def download_polyhaven(
-    asset_type: str, asset_id: str, resolution: str = "2k", file_format: str = None
+    asset_type: str, asset_id: str, resolution: str = "2k", file_format: str = None, **kwargs
 ) -> dict:
     """Download a PolyHaven asset (HDRI, texture, or model).
 
-
-
     Args:
-
         asset_type: 'hdri' | 'texture' | 'model' (plurals accepted)
-
         asset_id: Asset ID from search results
-
         resolution: For hdri/texture only ('1k'...'16k', default '2k')
-
         file_format: For hdri/model only (e.g., 'exr'/'hdr', or 'blend'/'fbx'/'gltf'); auto if omitted
 
-
-
     Returns:
-
         Dict describing the download/import result or an error.
-
     """
+    
+    # Handle hallucinated args
+    if "file_type" in kwargs and not file_format:
+        print(f"[PolyHaven] Warning: 'file_type' argument is hallucinated. Mapping to 'file_format'.")
+        file_format = kwargs["file_type"]
 
     # Normalize asset_type to singular lowercase (accept common plurals/synonyms)
 
