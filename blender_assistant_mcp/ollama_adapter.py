@@ -295,6 +295,7 @@ def chat_completion(
                 "message": result.get("message", {}),
                 "content": content,
                 "tool_calls": tool_calls if tool_calls else None,
+                "usage": result.get("usage"),
             }
 
         return {"error": "Invalid response from Ollama"}

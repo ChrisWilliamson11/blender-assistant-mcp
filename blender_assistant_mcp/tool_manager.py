@@ -197,7 +197,7 @@ class ToolManager:
 
     def get_compact_tool_list(self, enabled_tools: Set[str]) -> str:
         """Get a compact string representation of enabled tools for the system prompt."""
-        return tool_registry.get_tools_schema(enabled_tools=sorted(list(enabled_tools)))
+        return tool_registry.get_tools_prompt_hint(enabled_tools=sorted(list(enabled_tools)))
 
     def get_common_behavior_prompt(self) -> str:
         """Get the standardized BEHAVIOR section for all agents."""

@@ -53,12 +53,14 @@ def register():
         name="spawn_agent",
         func=spawn_agent,
         description=(
-            "Delegate a task to a Worker Agent (TASK_AGENT) or Verify completion (COMPLETION_AGENT).\n"
-            "RETURNS: A JSON Report containing 'status' (DONE/INCOMPLETE/ERROR), 'summary', and 'expected_changes'.\n"
-            "BEHAVIOR:\n"
-            "- BLOCKING: This tool waits for the agent to finish and returns the Final Report immediately.\n"
-            "- ERRORS: If status is 'ERROR' or 'INCOMPLETE', read the summary and plan your next step to fix it.\n"
-            "- SYNC: Use the returned 'expected_changes' to update your internal Task List tracking."
+            "Delegate a complex objective to a specialized autonomous agent.\n"
+            "ROLES & CAPABILITIES:\n"
+            "- TASK_AGENT: The 'Doer'. Capable of complex Blender operations (modeling, modifiers, shading), "
+            "Asset Retrieval (Polyhaven, Web), and scene organization. Use for all heavy lifting.\n"
+            "- COMPLETION_AGENT: The 'Checker'. specialized in inspecting the scene, verifying properties, "
+            "and ensuring requirements are met. Use to validate work before marking a task DONE.\n"
+            "RETURNS: Final Report {'status': 'DONE'|'ERROR', 'summary': '...', 'expected_changes': [...]}\n"
+            "BEHAVIOR: Blocking call. Returns when agent finishes. Use 'expected_changes' to update your plan."
         ),
         input_schema={
             "type": "object",

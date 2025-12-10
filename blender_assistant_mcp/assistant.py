@@ -110,7 +110,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         if usage:
             import json
             item.usage = json.dumps(usage)
-            item.image_data = images[0] # UI only supports showing one image for now
+
             
         if tool_name:
             # Store tool name in the message item if property exists, 
@@ -127,20 +127,21 @@ class ASSISTANT_OT_send(bpy.types.Operator):
             if area.type == 'VIEW_3D':
                 area.tag_redraw()
 
-    def _http_worker(self, model_name, messages, system_prompt, tools, debug_mode=False, keep_alive="5m"):
+    def _http_worker(self, model_name, messages, system_prompt, tools, **kwargs):
         """Background thread for LLM request."""
         try:
             # Prepend system prompt
             full_messages = [{"role": "system", "content": system_prompt}] + messages
             
+            # Pass all kwargs (n_ctx, n_gpu_layers, etc) down to adapter
             response = llama_manager.chat_completion(
                 model_path=model_name,
                 messages=full_messages,
                 tools=tools,
-                temperature=0.1, # Low temp for tool use
-                max_tokens=8192, # Allow space for long chain-of-thought
-                debug_mode=debug_mode,
-                keep_alive=keep_alive
+                # Default max_tokens if not in kwargs (usually num_predict in options)
+                # But adapter handles it via max_tokens arg or kwargs
+                max_tokens=8192, 
+                **kwargs
             )
             self._response = response
         except Exception as e:
@@ -218,9 +219,24 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         
         keep_alive = getattr(prefs, "keep_alive", "5m")
         
+        # Extract advanced GPU/Context settings
+        kwargs = {
+            "n_ctx": getattr(prefs, "num_ctx", 8192),
+            "n_gpu_layers": getattr(prefs, "gpu_layers", -1),
+            "n_batch": getattr(prefs, "batch_size", 256),
+            "temperature": getattr(prefs, "temperature", 0.7),
+            "top_k": getattr(prefs, "top_k", 40),
+            "top_p": getattr(prefs, "top_p", 0.9),
+            "repeat_penalty": getattr(prefs, "repeat_penalty", 1.1),
+            "seed": getattr(prefs, "seed_value", 42) if getattr(prefs, "use_seed", False) else None,
+            "keep_alive": keep_alive,
+            "debug_mode": debug_mode
+        }
+
         self._thread = threading.Thread(
             target=self._http_worker,
-            args=(model_name, session.history, system_prompt, tools, debug_mode, keep_alive),
+            args=(model_name, session.history, system_prompt, tools),
+            kwargs=kwargs,
             daemon=True
         )
         self._thread.start()

@@ -33,6 +33,12 @@ def task_add(description: str) -> Dict[str, Any]:
     
     Args:
         description: The task description (e.g., "Create base mesh")
+        
+    Returns:
+        Dict with:
+        - success: bool
+        - message: str
+        - task_index: int (Index of the new task)
     """
     tasks = _get_active_task_list()
     if tasks is None:
@@ -64,6 +70,12 @@ def task_update(index: int, status: str, notes: str = "") -> Dict[str, Any]:
         index: The index of the task to update (0-based)
         status: New status (TODO, IN_PROGRESS, DONE, FAILED, SKIPPED)
         notes: Optional notes or verification results
+        
+    Returns:
+        Dict with:
+        - success: bool
+        - message: str
+        - current_state: dict {name, status, notes}
     """
     tasks = _get_active_task_list()
     if tasks is None:
@@ -94,11 +106,23 @@ def task_update(index: int, status: str, notes: str = "") -> Dict[str, Any]:
     }
 
 def task_complete(index: int) -> Dict[str, Any]:
-    """Mark a task as DONE and provide a summary log."""
+    """Mark a task as DONE and provide a summary log.
+    
+    Returns:
+        Dict with:
+        - success: bool
+        - message: str
+        - current_state: dict {name, status, notes}
+    """
     return task_update(index, "DONE")
 
 def task_list() -> Dict[str, Any]:
-    """List all tasks and their current status."""
+    """List all tasks and their current status.
+    
+    Returns:
+        Dict with:
+        - tasks: List[Dict] (index, name, status, notes)
+    """
     tasks = _get_active_task_list()
     if tasks is None:
          return {"message": "No active chat session found."}
@@ -118,7 +142,13 @@ def task_list() -> Dict[str, Any]:
     return {"tasks": output_tasks}
 
 def task_clear(reason: str = "") -> Dict[str, Any]:
-    """Clear all tasks from the plan."""
+    """Clear all tasks from the plan.
+    
+    Returns:
+        Dict with:
+        - success: bool
+        - message: str
+    """
     tasks = _get_active_task_list()
     if tasks is None:
          return {"success": False, "error": "No active chat session found."}

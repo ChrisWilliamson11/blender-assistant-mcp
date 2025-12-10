@@ -5,7 +5,7 @@ from .tool_registry import (
     unregister_tool,
     execute_tool,
     get_tools_list,
-    get_tools_schema,
+    get_tools_prompt_hint,
     clear_tools,
 )
 
@@ -14,6 +14,6 @@ __all__ = [
     'unregister_tool',
     'execute_tool',
     'get_tools_list',
-    'get_tools_schema',
+    'get_tools_prompt_hint',
     'clear_tools',
 ]

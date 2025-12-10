@@ -323,6 +323,17 @@ class AgentTools:
                         self.execute_in_main_thread(self.message_callback, role, "Executing code...", name=role)
                         
                     result = self.execute_in_main_thread(tool_registry.execute_tool, "execute_code", {"code": code})
+                    
+                    # Scene Watcher Update (Merged into Result)
+                    if self.scene_watcher:
+                        changes = self.execute_in_main_thread(self.scene_watcher.consume_changes)
+                        if changes:
+                             if isinstance(result, dict):
+                                 result["scene_changes"] = changes
+                             else:
+                                 result = {"output": result, "scene_changes": changes}
+                             print(f"[AgentTools] [AGENT: {role}] SCENE UPDATES merged: {changes}")
+
                     result_str = json.dumps(result)
                     print(f"[AgentTools] [AGENT: {role}] Execution Result: {result_str}")
                     
@@ -333,12 +344,6 @@ class AgentTools:
                     if self.message_callback:
                          self.execute_in_main_thread(self.message_callback, "system", f"Result: {result_str}", name=role)
 
-                    # Scene Watcher Update
-                    if self.scene_watcher:
-                        changes = self.execute_in_main_thread(self.scene_watcher.consume_changes)
-                        if changes:
-                             print(f"[AgentTools] [AGENT: {role}] SCENE UPDATES: {changes}")
-                             messages.append({"role": "system", "content": f"SCENE UPDATES (Objects Modified/Created): {changes}"})
 
                 elif tool_call:
                     t_name = tool_call.get("name")
@@ -360,6 +365,17 @@ class AgentTools:
                          # Safe to run in background (e.g. spawn_agent, finish_task)
                          result = tool_registry.execute_tool(t_name, t_args)
 
+                     
+                    # Scene Watcher Update (Merged into Result)
+                    if self.scene_watcher:
+                        changes = self.execute_in_main_thread(self.scene_watcher.consume_changes)
+                        if changes:
+                             if isinstance(result, dict):
+                                 result["scene_changes"] = changes
+                             else:
+                                 result = {"output": result, "scene_changes": changes}
+                             print(f"[AgentTools] [AGENT: {role}] SCENE UPDATES merged: {changes}")
+
                     result_str = json.dumps(result)
                     
                     messages.append({"role": "assistant", "content": content})
@@ -368,11 +384,6 @@ class AgentTools:
                     if self.message_callback:
                          self.execute_in_main_thread(self.message_callback, "system", f"Result: {result_str}", name=role)
 
-                    if self.scene_watcher:
-                        changes = self.execute_in_main_thread(self.scene_watcher.consume_changes)
-                        if changes:
-                             print(f"[AgentTools] [AGENT: {role}] SCENE UPDATES: {changes}")
-                             messages.append({"role": "system", "content": f"SCENE UPDATES (Objects Modified/Created): {changes}"})
 
                 elif expected_changes:
                     # Final Answer
@@ -440,6 +451,7 @@ class AgentTools:
             import bpy
 
             # 1. Determine Agent Universe & User Permissions
+            universe = self.tool_manager.get_allowed_tools_for_role(role)
             prefs = None
             try:
                 # Robustly find preferences (handles Zip vs Extension)

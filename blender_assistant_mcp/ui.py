@@ -821,7 +821,7 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
         try:
             prefs = context.preferences.addons[__package__].preferences
             show_thinking = getattr(prefs, "show_thinking", True)
-            show_scene = getattr(prefs, "show_scene_updates", True)
+            show_system = getattr(prefs, "show_system_updates", False)
             show_tools = getattr(prefs, "show_tool_outputs", True)
         except Exception:
             # Fallback if prefs not ready
@@ -848,9 +848,9 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
                 if not show_tools:
                     visible = False
             
-            # 3. Scene Updates (System role + content check)
-            elif (item.role.lower() == "system") and ("Scene Changes" in item.content or "SCENE_UPDATES" in item.content):
-                if not show_scene:
+            # 3. System Updates (Any System role)
+            elif item.role.lower() == "system":
+                if not show_system:
                     visible = False
             
             if visible:

@@ -38,6 +38,7 @@ class SceneWatcher:
                 
         return {
             "name": obj.name,
+            "pointer": obj.as_pointer(), # Track identity
             "type": obj.type,
             "location": tuple(round(x, 4) for x in obj.location),
             "dimensions": tuple(round(x, 4) for x in obj.dimensions),
@@ -120,10 +121,21 @@ class SceneWatcher:
         if self.dirty_object_names:
             candidates = candidates & self.dirty_object_names
             
+        replaced = []
         modified = []
+        
         for name in candidates:
             old_sig = self.last_state[name]
             new_sig = current_state[name]
+            
+            # 0. Identity Check (Replacement)
+            # If name matches but pointer differs, object was deleted and recreated
+            if old_sig.get("pointer") != new_sig.get("pointer"):
+                replaced.append({
+                    "name": name,
+                    "new_type": new_sig["type"]
+                })
+                continue # Skip modification check for replaced objects
             
             diff = []
             
@@ -154,6 +166,9 @@ class SceneWatcher:
             if diff:
                 modified.append(f"{name} ({', '.join(diff)})")
                 
+        if replaced:
+            changes["replaced"] = replaced
+            
         if modified:
             changes["modified"] = modified
 
@@ -177,10 +192,10 @@ class SceneWatcher:
 
         return changes
 
-    def consume_changes(self) -> str:
+    def consume_changes(self) -> Dict[str, Any]:
+        """Consume and return changes as a dictionary. Resets state."""
         changes = self.get_changes()
         if changes:
             self.capture_state()
-            import json
-            return json.dumps(changes)
-        return ""
+            return changes
+        return {}

@@ -450,7 +450,7 @@ def get_tool_schema(name: str) -> Dict[str, Any]:
 
 
 
-def get_tools_schema(enabled_tools: List[str] = None) -> str:
+def get_tools_prompt_hint(enabled_tools: List[str] = None) -> str:
     """Return a compact tools cheat-sheet for the system prompt.
 
     Format per tool: "- name(arg1, arg2, ...): short description"

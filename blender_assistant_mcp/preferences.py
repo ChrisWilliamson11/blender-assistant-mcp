@@ -1165,10 +1165,10 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         default=True,
     )
 
-    show_scene_updates: bpy.props.BoolProperty(
-        name="Show Scene Updates",
-        description="Show/hide automated scene change notifications in the chat",
-        default=True,
+    show_system_updates: bpy.props.BoolProperty(
+        name="Show System Updates",
+        description="Show/hide system-level notifications (e.g. scene updates, hidden tool outputs) in the chat",
+        default=False,
     )
 
     show_tool_outputs: bpy.props.BoolProperty(
@@ -2120,7 +2120,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
         
         col = box.column(align=True)
         col.prop(self, "show_thinking", text="Show Thinking Process")
-        col.prop(self, "show_scene_updates", text="Show Scene Updates")
+        col.prop(self, "show_system_updates", text="Show System Updates")
         col.prop(self, "show_tool_outputs", text="Show Tool Details")
         
         col.separator()

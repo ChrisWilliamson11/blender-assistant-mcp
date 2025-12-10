@@ -23,7 +23,11 @@ def web_search(query: str, num_results: int = 5) -> dict:
         num_results: Number of results to return (default: 5, max: 10)
 
     Returns:
-        Search results as dict with titles, URLs, and descriptions
+        Dict with:
+        - results: List[Dict] (title, url, snippet)
+        - formatted: str (Readable summary)
+        - query: str
+        - count: int
     """
     try:
         import re
@@ -207,7 +211,12 @@ def search_wikimedia_image(query: str, apply_to_active: bool = True) -> dict:
         apply_to_active: Whether to apply texture to active object (default: True)
 
     Returns:
-        Dict with success status and image info
+        Dict with:
+        - success: bool
+        - image_url: str
+        - source: str
+        - title: str
+        - message: str
     """
     try:
         # Use Wikimedia Commons API - free, reliable, no rate limits
@@ -309,7 +318,11 @@ def fetch_webpage(url: str, max_length: int = 10000) -> dict:
         max_length: Maximum length of text to return (default: 10000 chars)
 
     Returns:
-        Dictionary with extracted text content
+        Dict with:
+        - success: bool
+        - text: str (Extracted content)
+        - length: int
+        - url: str
     """
     try:
         import re
@@ -388,9 +401,12 @@ def download_image_as_texture(
 
 
     Returns:
-
-        Dictionary with download result and image name
-
+        Dict with:
+        - success: bool
+        - image_name: str
+        - file_path: str
+        - texture_node: str (if applied)
+        - message: str
     """
 
     try:

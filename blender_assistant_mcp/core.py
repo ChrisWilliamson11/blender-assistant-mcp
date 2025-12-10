@@ -165,10 +165,10 @@ class ResponseParser:
         code_blocks = re.findall(r"```(?:python)?\s*(.+?)\s*```", content, re.DOTALL | re.IGNORECASE)
         
         for block in code_blocks:
-            # Heuristic: Only treat as code execution if it looks like Blender API usage
-            if "import bpy" in block or "bpy." in block:
+            # Heuristic: Check for Blender API or SDK usage
+            # We allow multiple blocks to support "Setup" then "Execute" flows
+            if any(k in block for k in ["import bpy", "bpy.", "spawn_agent(", "finish_task(", "assistant_sdk."]):
                 tool_calls.append(ToolCall(tool="execute_code", args={"code": block}))
-                break # Only take the first code block to avoid confusion
                 
         return tool_calls
 
@@ -232,8 +232,8 @@ class AssistantSession:
         # Generate hints for disabled tools (SDK Mode support)
         # Sdk Hints = Allowed - Enabled
         sdk_hints = self.tool_manager.get_system_prompt_hints(enabled_tools, allowed_tools=allowed_tools)
-        
-        memory_context = self.memory_manager.get_context() or "(No memories yet)"
+        #not injecting memory into system prompt as it seems to add confusion
+        #memory_context = self.memory_manager.get_context() or "(No memories yet)"
         
         # Check for scene changes
         raw_changes = self.scene_watcher.consume_changes()
@@ -379,17 +379,21 @@ class AssistantSession:
                 return result
 
             
+            # Check for scene side-effects immediately
+            # This ensures the LLM knows what changed as part of the tool result
+            changes = self.scene_watcher.consume_changes()
+            if changes:
+                if isinstance(result, dict):
+                    result["scene_changes"] = changes
+                else:
+                    # Wrap non-dict results
+                    result = {"output": result, "scene_changes": changes}
+
             # Add result to history (Truncate if too large to prevent context overflow)
             result_str = json.dumps(result)
             if len(result_str) > 2000:
                 result_str = result_str[:2000] + "... [Truncated]"
             self.add_message("tool", result_str, name=call.tool)
-            
-            # Check for scene side-effects immediately
-            # This ensures the LLM knows what changed *before* it generates the next step
-            changes = self.scene_watcher.consume_changes()
-            if changes:
-                self.add_message("system", f"SCENE UPDATES: {changes}")
             
             return result
 
