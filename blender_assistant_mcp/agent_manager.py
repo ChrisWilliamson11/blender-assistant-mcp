@@ -45,6 +45,12 @@ class AgentTools:
         self.agents: Dict[str, Agent] = self._setup_agents()
         
     def _setup_agents(self) -> Dict[str, Agent]:
+        # Import prompts here to avoid top-level circular deps if any
+        try:
+            from .scene_agent import SCENE_AGENT_PROMPT
+        except ImportError:
+            SCENE_AGENT_PROMPT = "You are the Scene Agent. Analyze the scene and report findings."
+
         return {
             "TASK_AGENT": Agent(
                 name="TASK_AGENT",
@@ -52,47 +58,71 @@ class AgentTools:
                 system_prompt="""You are the Task Agent. Your job is to EXECUTE the task given by the Manager.
                 
                 PROCESS:
+                - PLAN FIRST: If the task is complex, use `task_plan` to break it down.
+                - BE CONCISE: Keep your 'thought' field short. Long thoughts cause JSON errors.
+                - NO MARKDOWN IN JSON: Do not put code blocks (```) inside the JSON string values.
+                
                 1. ANALYZE: Understand the specific task.
                 2. PLAN: If complex, break down into steps.
                 3. EXECUTE: Use tools to achieve the goal.
-                4. VERIFY: Check if your actions worked.
+                4. VERIFY: Check if your actions worked (Read the 'scene_changes' in the Tool Result).
                 5. REPORT: Return `expected_changes` JSON summary when done.
                 
+                RESPONSE FORMAT:
+                You MUST return a JSON object with a 'thought' field explaining your reasoning, and either 'tool_call', 'code', or 'expected_changes'.
+                Example:
+                {
+                    "thought": "I need to find the object. I will use get_scene_info...",
+                    "tool_call": { ... }
+                }
+
                 RULES:
-                - CHECK BEFORE CREATING: Always check if an object or material exists (using `get_scene_info` or `inspect_data`) before trying to create it! Do not create duplicate objects (e.g. Floor, Floor.001) if the goal is to modify the existing one.
-                - NO INTERACTIVE QUESTIONS: You are running in a background loop. You CANNOT ask the user questions directly. If you are missing critical information (e.g. file paths, dimensions) that prevents you from proceeding, you must ABORT by calling `finish_task` with a clear summary of what is missing.
-                - Use `sdk_help(tool_names=['...'])` to get multiple schemas at once.
-                - For PolyHaven, always `search_polyhaven_assets` first to get an ID before downloading.
-                - If a tool fails with a specific error (e.g. Resolution not found), try a different parameter instead of giving up."""
+                - BACKGROUND PROCESS: You are running in a non-interactive loop. Use tools to interact with the system.
+                - TASK LIST PROTOCOL: **CRITICAL**: Start by calling `task_list`. Do NOT rely solely on the query string. If tasks exist, work through them sequentially. Mark items as IN_PROGRESS or DONE using `task_update`.
+                - BATCHING: Do NOT stop after one task. Execute ALL pending tasks in the list until blocked.
+                - CODING GUIDELINES:
+                    - DEFENSIVE CODING: Check `if obj.name in collection.objects:` before `unlink`. Avoid assumptions about object state.
+                    - ERROR HANDLING: If a tool fails, report it in JSON. Do NOT panic and output raw text.
+                - COMPLETION PROTOCOL: When satisfied (or all tasks DONE), you MUST call `finish_task` with a summary. This is the only way to report success.
+                - VERIFICATION PROTOCOL: Inspect `scene_changes` in the tool result first. If it confirms the action (e.g. 'added': [...]), you are DONE. Do NOT call `get_scene_info` unless the result is ambiguous. 
+                - MISSING INFO PROTOCOL: If critical information is missing, use `finish_task` to report the gap and request user input.
+                - Use `sdk_help` to learn tool usage.
+                - If a tool fails, try a different parameter."""
             ),
             "COMPLETION_AGENT": Agent(
                 name="COMPLETION_AGENT",
                 description="Specializes in verifying if the user's request is fully satisfied.",
                 system_prompt="""You are the Completion Agent. 
                 
-                YOUR JOB: Verify if the user's request is satisfied.
-                
-                PROCESS:
-                1. INSPECT: Use tools like `get_scene_info` or `get_object_info` to check the scene.
-                2. EVALUATE: Compare scene state against the User's goal.
-                3. REPORT: Output the JSON decision.
+                - Do NOT guess. If unsure, use `inspect_data` or `get_scene_info` to find the truth.
+                - If a check fails, report the specific property that mismatch.
+                - When checks pass, calling `finish_task` is MANDATORY.
 
-                RESPONSE FORMAT (Choose One):
+                CONTEXT SAFETY:
+                - Do NOT call `get_object_info(verbose=True)` for everything. Use `get_scene_info` for high-level checks.
+                - For deep inspection, use `consult_scene_agent`.
+                
+                REPORTING FORMAT (When Step 3 is reached):
                 1. IF COMPLETE:
                 {
-                    "thought": "I have verified X, Y, Z...",
                     "expected_changes": {"status": "COMPLETE"}
                 }
                 
                 2. IF INCOMPLETE:
                 {
-                    "thought": "Missing X...",
                     "expected_changes": {"status": "INCOMPLETE", "missing": ["X"]}
                 }
                 
                 RULES:
-                - You MUST use tools to verify. Do not guess.
-                - If you cannot verify, assume INCOMPLETE."""
+                - CONTEXT SAFETY: **CRITICAL**: Do NOT use `get_object_info(verbose=True)` for multiple objects or validation. It dumps massive data and crashes the session. Use `inspect_data` for specific properties if needed.
+                - EVIDENCE REQUIREMENT: Base all decision on concrete tool outputs (e.g. `get_object_info` default mode).
+                - TASK LIST PROTOCOL: Use `task_list` to see the "Plan of Record". Verify EACH item marked DONE.
+                - INCOMPLETION PROTOCOL: If verification fails or data is missing, report as INCOMPLETE with details."""
+            ),
+            "SCENE_AGENT": Agent(
+                name="SCENE_AGENT",
+                description="Specializes in researching the scene state to answer queries.",
+                system_prompt=SCENE_AGENT_PROMPT
             )
         }
         
@@ -119,11 +149,18 @@ class AgentTools:
             raise result_container['error']
         return result_container.get('result')
 
-    def _run_autonomous_loop(self, role, messages, model_to_use, tools=None):
+    def _run_autonomous_loop(self, role, messages, model_to_use, tools=None, llm_settings=None):
         """Background thread loop for the agent."""
         turn_count = 0
         empty_turns = 0 # Track consecutive empty turns
         from .tools import tool_registry
+        
+        # Default settings if none provided
+        if not llm_settings:
+            llm_settings = {
+                "temperature": 0.2, # Override default 0.7 for agents
+                "n_ctx": 8192
+            }
         
         while True:
             turn_count += 1
@@ -186,14 +223,35 @@ class AgentTools:
                      current_messages.insert(0, {"role": "system", "content": full_system_prompt})
 
 
-                # LLM Request                # LLM Request
-                response = self.llm_client.chat_completion(
-                    model_path=model_to_use, 
-                    messages=current_messages,
-                    format="json",
-                    temperature=0.2,
-                    tools=tools
-                )
+                # LLM Request
+                # Prepare kwargs from settings
+                kwargs = {
+                     "format": "json",
+                     "stream": True,
+                     "tools": tools,
+                     "model_path": model_to_use,
+                     "messages": current_messages
+                }
+                
+                # Merge unified settings
+                if llm_settings:
+                    # Map settings to chat_completion arguments
+                    # standard: temperature, n_ctx
+                    # adapter-specific (passed via **kwargs handling in adapter? no, adapter takes specific args)
+                    # Checking chat_completion signature in Core or Adapter? 
+                    # Adapter `chat_completion` accepts `**kwargs`.
+                    # We pass the settings dict as kwargs.
+                    kwargs.update(llm_settings)
+                    
+                    # Force agent-specific overrides if needed (e.g. lower temp for tasks)
+                    # But user preference should arguably rule. 
+                    # For now, let's respect global preference unless it's unset.
+                    if "temperature" not in llm_settings:
+                        kwargs["temperature"] = 0.2
+                else:
+                    kwargs["temperature"] = 0.2
+
+                response = self.llm_client.chat_completion(**kwargs)
                 
                 # CRITICAL: Check for LLM errors (e.g. Ollama offline)
                 if response.get("error"):
@@ -226,48 +284,117 @@ class AgentTools:
                             name=role
                         )
                 
+                
+                new_data = {}
                 content = response.get("content", "{}")
                 tool_calls = response.get("tool_calls", []) or response.get("message", {}).get("tool_calls", [])
-
-                # MCP Tool Logic
-                if (not content or content == "{}") and tool_calls:
+                
+                # Check for Native Thinking (Ollama/DeepSeek)
+                native_thinking = response.get("message", {}).get("thinking", "")
+                
+                # If we have thinking but no content/tools, syntesize content
+                if native_thinking and not tool_calls:
+                     # Attempt to preserve existing content if it's JSON
                      try:
-                         call = tool_calls[0]
-                         fn_name = call.get("function", {}).get("name")
-                         fn_args = call.get("function", {}).get("arguments")
+                         _d = json.loads(content) if content else {}
+                     except:
+                         _d = {"thought": str(content)} if content else {}
+                     
+                     # Merge thinking
+                     exist_th = _d.get("thought", "")
+                     if exist_th:
+                         _d["thought"] = f"{native_thinking}\n\n{exist_th}"
+                     else:
+                         _d["thought"] = native_thinking
+                     
+                     content = json.dumps(_d)
+
+                # MCP Tool Logic (Native & Content Merging)
+                if tool_calls:
+                     try:
+                         # 1. Extract valid thought from existing content if possible
+                         existing_thought = ""
+                         if content and content != "{}":
+                             try:
+                                 _tmp = json.loads(content)
+                                 existing_thought = _tmp.get("thought", "")
+                             except:
+                                 # If content is just text, use it as thought
+                                 existing_thought = str(content)
+
+                         # 2. Capture Native Thinking (Ollama/DeepSeek)
+                         native_thinking = response.get("message", {}).get("thinking", "")
+                         if native_thinking:
+                             # Prefer native thinking or append it
+                             if existing_thought:
+                                 existing_thought = f"{native_thinking}\n\n{existing_thought}"
+                             else:
+                                 existing_thought = native_thinking
+
+                         # 2. Process Native Tool Calls (Multi-Tool Support)
+                         new_data["tool_calls"] = []
                          
-                         if isinstance(fn_args, str):
-                             fn_args = json.loads(fn_args)
+                         for call in tool_calls:
+                             fn_name = call.get("function", {}).get("name")
+                             fn_args = call.get("function", {}).get("arguments")
                              
-                         new_data = {"thought": f"Invoking MCP tool: {fn_name}"}
-                         
-                         if fn_name == "execute_code":
-                             new_data["code"] = fn_args.get("code", "")
-                         elif fn_name == "finish_task":
-                             new_data["expected_changes"] = fn_args.get("expected_changes", [])
-                             if "summary" in fn_args:
-                                 new_data["thought"] += f" Summary: {fn_args['summary']}"
-                         else:
-                             new_data["tool_call"] = {"name": fn_name, "args": fn_args}
+                             if isinstance(fn_args, str):
+                                 try:
+                                    fn_args = json.loads(fn_args)
+                                 except:
+                                    pass # Keep as string or error?
+                             
+                             # Special Handling for finish_task updates
+                             if fn_name == "finish_task":
+                                 new_data["expected_changes"] = fn_args.get("expected_changes", [])
+                                 if "summary" in fn_args:
+                                     summary_text = fn_args['summary']
+                                     new_data["finish_summary"] = summary_text
+                                     new_data["thought"] += f" [Completing Task: {summary_text}]"
+                                 # We still append it to execute it properly (for state update)
+                             
+                             new_data["tool_calls"].append({"name": fn_name, "args": fn_args})
                              
                          content = json.dumps(new_data)
                      except Exception as e:
                          print(f"[AgentTools] [AGENT: {role}] Failed to parse MCP tool call: {e}")
 
                 # Processing Content
-                try:
-                    data = json.loads(content)
-                except json.JSONDecodeError:
-                    print(f"[AgentTools] [AGENT: {role}] JSON Parse Error. Content: {content[:100]}...")
-                    if self.message_callback:
-                         self.execute_in_main_thread(self.message_callback, role, f"Raw Response (Invalid JSON): {content}", name=role)
-                    messages.append({"role": "user", "content": "Error: Invalid JSON response. Please return valid JSON."})
-                    continue
+                # Processing Content
+                if not content or str(content).strip() == "":
+                     # Handle completely empty response
+                     print(f"[AgentTools] [AGENT: {role}] Empty Content Received.")
+                     # Fall through to empty_turns logic (we populate empty data)
+                     data = {}
+                else:
+                    try:
+                        data = json.loads(content)
+                    except json.JSONDecodeError:
+                        print(f"[AgentTools] [AGENT: {role}] JSON Parse Error. Content: {content[:100]}...")
+                        empty_turns += 1
+                        
+                        if empty_turns >= 5:
+                             if self.message_callback:
+                                 self.execute_in_main_thread(self.message_callback, role, "Agent stuck in invalid format loop. Aborting.", name=role)
+                             return
+                        
+                        if self.message_callback:
+                             # Show the RAW content so user can debug "Invalid Format"
+                             raw_preview = content
+                             if len(raw_preview) > 500: raw_preview = raw_preview[:500] + "... [Truncated]"
+                             error_msg = f"Agent returned invalid format. Raw Output:\n```json\n{raw_preview}\n```"
+                             self.execute_in_main_thread(self.message_callback, "system", error_msg, name=role)
+                             
+                             # Retry logic remains
+                             self.execute_in_main_thread(self.message_callback, role, "Agent returned invalid format. Retrying...", name=role)
+                        messages.append({"role": "user", "content": "Error: Invalid JSON response. Please return valid JSON."})
+                        continue
                     
                 thought = data.get("thought", "")
                 code = data.get("code", "")
                 tool_call = data.get("tool_call")
                 expected_changes = data.get("expected_changes")
+                finish_summary = data.get("finish_summary")
                 
                 # SILENT LOOP PROTECTION
                 if not thought and not code and not tool_call and not expected_changes:
@@ -317,94 +444,104 @@ class AgentTools:
                     self.execute_in_main_thread(self.message_callback, "thinking", thought, name=role, usage=usage if "usage" in locals() else None)
                 
                 # Execution Priority: Code > Tool Call > Expected Changes
+                # Execution Priority: Tool Calls (List) > Legacy Code/ToolCall
+                # Normalize everything into a list of executions
+                pending_executions = []
+                
+                # 1. New List Format
+                if data.get("tool_calls"):
+                    pending_executions.extend(data["tool_calls"])
+                
+                # 2. Legacy Formats
                 if code:
-                    print(f"[AgentTools] [AGENT: {role}] Executing Code via Queue...")
-                    if self.message_callback:
-                        self.execute_in_main_thread(self.message_callback, role, "Executing code...", name=role)
-                        
-                    result = self.execute_in_main_thread(tool_registry.execute_tool, "execute_code", {"code": code})
-                    
-                    # Scene Watcher Update (Merged into Result)
-                    if self.scene_watcher:
-                        changes = self.execute_in_main_thread(self.scene_watcher.consume_changes)
-                        if changes:
-                             if isinstance(result, dict):
-                                 result["scene_changes"] = changes
-                             else:
-                                 result = {"output": result, "scene_changes": changes}
-                             print(f"[AgentTools] [AGENT: {role}] SCENE UPDATES merged: {changes}")
-
-                    result_str = json.dumps(result)
-                    print(f"[AgentTools] [AGENT: {role}] Execution Result: {result_str}")
-                    
-                    messages.append({"role": "assistant", "content": content})
-                    messages.append({"role": "user", "content": f"Result: {result_str}"})
-
-                    # Show Result in UI
-                    if self.message_callback:
-                         self.execute_in_main_thread(self.message_callback, "system", f"Result: {result_str}", name=role)
-
-
-                elif tool_call:
-                    t_name = tool_call.get("name")
-                    t_args = tool_call.get("args", {})
-                    print(f"[AgentTools] [AGENT: {role}] Executing MCP Tool '{t_name}' via Queue...")
-                    
-                    if self.message_callback:
-                        self.execute_in_main_thread(self.message_callback, role, f"Executing {t_name}...", name=role)
-
-                    # SPECIAL CASE: spawn_agent must run in THIS thread to allow recursion/blocking
-                    # All other tools run in Main Thread via Queue
-                    # UPDATE: Now using metadata from registry
-                    t_info = tool_registry.get_tool_info(t_name)
-                    requires_main = t_info.get("requires_main_thread", True)
-                    
-                    if requires_main:
-                         result = self.execute_in_main_thread(tool_registry.execute_tool, t_name, t_args)
-                    else:
-                         # Safe to run in background (e.g. spawn_agent, finish_task)
-                         result = tool_registry.execute_tool(t_name, t_args)
-
+                    pending_executions.append({"name": "execute_code", "args": {"code": code}})
+                if tool_call:
+                     pending_executions.append(tool_call)
                      
-                    # Scene Watcher Update (Merged into Result)
-                    if self.scene_watcher:
-                        changes = self.execute_in_main_thread(self.scene_watcher.consume_changes)
-                        if changes:
-                             if isinstance(result, dict):
-                                 result["scene_changes"] = changes
-                             else:
-                                 result = {"output": result, "scene_changes": changes}
-                             print(f"[AgentTools] [AGENT: {role}] SCENE UPDATES merged: {changes}")
-
-                    result_str = json.dumps(result)
-                    
+                if pending_executions:
                     messages.append({"role": "assistant", "content": content})
-                    messages.append({"role": "user", "content": f"Result: {result_str}"})
-
-                    if self.message_callback:
-                         self.execute_in_main_thread(self.message_callback, "system", f"Result: {result_str}", name=role)
-
-
-                elif expected_changes:
-                    # Final Answer
-                    print(f"[AgentTools] [AGENT: {role}] Finished.")
-                    if self.message_callback:
-                        self.execute_in_main_thread(self.message_callback, role, "Task finished. Reporting back.", name=role)
                     
-                    final_result = {
-                        "status": "DONE",
-                        "agent": role,
-                        "expected_changes": expected_changes,
-                        "summary": thought
-                    }
-                    
-                    def finish_callback():
-                        if hasattr(self, "on_agent_finish"):
-                             self.on_agent_finish(final_result)
-                    
-                    self.execute_in_main_thread(finish_callback)
-                    # Helper return for synchronous calls
-                    return final_result
+                    # Execute all planned tools
+                    for i, t_call in enumerate(pending_executions):
+                        t_name = t_call.get("name")
+                        t_args = t_call.get("args", {})
+                        
+                        # Logging
+                        print(f"[AgentTools] [AGENT: {role}] Executing '{t_name}' ({i+1}/{len(pending_executions)})...")
+                        
+                        if self.message_callback:
+                             # Status update
+                             status_msg = f"Executing {t_name}..."
+                             if t_name == "execute_code":
+                                 code_preview = t_args.get("code", "").strip()
+                                 if code_preview: status_msg = f"Executing code:\n```python\n{code_preview}\n```"
+                             elif t_name == "finish_task":
+                                 status_msg = f"Finishing Task: {t_args.get('summary', '')}"
+                             
+                             self.execute_in_main_thread(self.message_callback, "system", status_msg, name=role)
+
+                        # Execution
+                        t_info = tool_registry.get_tool_info(t_name)
+                        requires_main = t_info.get("requires_main_thread", True) if t_info else True
+                        
+                        try:
+                            if requires_main:
+                                result = self.execute_in_main_thread(tool_registry.execute_tool, t_name, t_args)
+                            else:
+                                result = tool_registry.execute_tool(t_name, t_args)
+                                
+                            # Scene Changes
+                            if self.scene_watcher:
+                                changes = self.execute_in_main_thread(self.scene_watcher.consume_changes)
+                                if changes:
+                                     if isinstance(result, dict): result["scene_changes"] = changes
+                                     else: result = {"output": result, "scene_changes": changes}
+                        except Exception as e:
+                            result = {"status": "ERROR", "error": str(e)}
+
+                        # Result Reporting
+                        result_str = json.dumps(result)
+                        print(f"[AgentTools] [AGENT: {role}] Result: {result_str}")
+                        
+                        # Append Result to History
+                        # We append distinct user messages for each result so the LLM sees the sequence
+                        messages.append({"role": "user", "content": f"Result ({t_name}): {result_str}"})
+                        
+                        # UI Feedback
+                        if self.message_callback:
+                             self.execute_in_main_thread(self.message_callback, "system", f"Result: {result_str}", name=role)
+                             
+                        # Termination Check (finish_task)
+                        if t_name == "finish_task" and isinstance(result, dict) and result.get("status") == "DONE":
+                            print(f"[AgentTools] [AGENT: {role}] explicit finish_task called. Exiting loop.")
+                            if not result.get("agent"): result["agent"] = role
+                            return result
+                            
+                    # Continue Loop (LLM sees results and decides next step)
+                    continue
+                
+                # FALLBACK (Legacy Block Placeholder)
+                elif False and code:
+                    pass
+
+
+
+                elif expected_changes is not None:
+                     print(f"[AgentTools] [AGENT: {role}] Task Finished. Changes: {expected_changes}")
+                     
+                     if self.message_callback:
+                         if finish_summary:
+                             self.execute_in_main_thread(self.message_callback, "system", f"Task Completed: {finish_summary}", name=role)
+                         else:
+                             self.execute_in_main_thread(self.message_callback, role, "Task Finished.", name=role)
+
+                     # Final Result
+                     return {
+                         "status": "DONE",
+                         "agent": role,
+                         "expected_changes": expected_changes,
+                         "summary": finish_summary or thought
+                     }
                     
                 else:
                     # Generic text response? Usually shouldn't happen in Agent Mode
@@ -477,8 +614,16 @@ class AgentTools:
             behavior_prompt = self.tool_manager.get_common_behavior_prompt()
 
         # Inject tool definitions into system prompt for robustness
-        tools_text = json.dumps(tool_schemas, indent=2)
+        # We use NAMES only here to avoid duplication if the LLM also sees the 'tools' param.
+        tool_names = sorted([t["function"]["name"] for t in tool_schemas])
+        tools_text = json.dumps(tool_names, indent=2)
         
+        # Define Goal
+        if role == "COMPLETION_AGENT":
+             goal_text = "Your goal is to verify the clients query is complete. Use your tools."
+        else:
+             goal_text = "Your goal is to solve the user's query efficiently. Use your tools."
+
         system_prompt = (
             f"You are the {agent.name}.\n"
             f"{agent.system_prompt}\n\n"
@@ -487,8 +632,7 @@ class AgentTools:
             f"{behavior_prompt}\n\n"
             f"MCP TOOLS:\n{tools_text}\n\n"
             f"{sdk_hints}\n\n"
-            "Your goal is to solve the user's query efficiently. "
-            "Use your tools."
+            f"{goal_text}"
         )
 
         if prefs and getattr(prefs, "debug_mode", False):
@@ -530,7 +674,20 @@ class AgentTools:
              return result or {"status": "ERROR", "error": "Agent loop returned None"}
 
         # ASYNC/THREAD MODE (For Top-Level Agents called by UI)
-        t = threading.Thread(target=self._run_autonomous_loop, args=(role, messages, model_to_use, tool_schemas), daemon=True)
+        # Fetch settings globally (Main Thread Safe)
+        from .preferences import get_llm_settings
+        import bpy
+        try:
+            llm_settings = get_llm_settings(bpy.context)
+        except:
+             llm_settings = {}
+
+        def thread_target(r, m, mod, sch, settings):
+            res = self._run_autonomous_loop(r, m, mod, sch, settings)
+            if res and hasattr(self, "on_agent_finish") and self.on_agent_finish:
+                self.execute_in_main_thread(self.on_agent_finish, res)
+
+        t = threading.Thread(target=thread_target, args=(role, messages, model_to_use, tool_schemas, llm_settings), daemon=True)
         t.start()
         
         return json.dumps({"type": "AGENT_STARTED", "role": role})

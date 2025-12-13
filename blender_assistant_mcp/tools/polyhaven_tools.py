@@ -12,7 +12,13 @@ import httpx
 from . import tool_registry
 
 
-def search_polyhaven_assets(asset_type: str, query: str = "", limit: int = 10) -> dict:
+
+# Headers for API compliance
+REQ_HEADERS = {
+    "User-Agent": "BlenderAssistant/1.0 (Educational)"
+}
+
+def search_polyhaven_assets(asset_type: str = "", query: str = "", limit: int = 10) -> dict:
     """Search for assets on PolyHaven.
 
     Args:
@@ -26,7 +32,7 @@ def search_polyhaven_assets(asset_type: str, query: str = "", limit: int = 10) -
     # PolyHaven API endpoint - get ALL assets (no type filter in URL)
     api_url = "https://api.polyhaven.com/assets"
 
-    with httpx.Client() as client:
+    with httpx.Client(headers=REQ_HEADERS) as client:
         response = client.get(api_url, timeout=10.0)
         response.raise_for_status()
         all_assets = response.json()
@@ -123,7 +129,7 @@ def get_polyhaven_asset_info(asset_id: str) -> dict:
     """
     api_url = f"https://api.polyhaven.com/info/{asset_id}"
 
-    with httpx.Client() as client:
+    with httpx.Client(headers=REQ_HEADERS) as client:
         response = client.get(api_url, timeout=10.0)
         # Check for 404 manually to give better error
         if response.status_code == 404:
@@ -208,7 +214,7 @@ def download_polyhaven_hdri(
     # Get asset info to find download URL
     api_url = f"https://api.polyhaven.com/files/{asset_id}"
 
-    with httpx.Client() as client:
+    with httpx.Client(headers=REQ_HEADERS) as client:
         response = client.get(api_url, timeout=10.0)
         # Check for 404 manually to give better error
         if response.status_code == 404:
@@ -260,7 +266,7 @@ def download_polyhaven_hdri(
             has_progress = False
 
     try:
-        with httpx.Client() as client:
+        with httpx.Client(headers=REQ_HEADERS) as client:
             with client.stream("GET", download_url, timeout=60.0) as response:
                 response.raise_for_status()
                 total_size = int(response.headers.get("content-length", 0))
@@ -335,7 +341,7 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
     # Get asset info to find download URLs
     api_url = f"https://api.polyhaven.com/files/{asset_id}"
 
-    with httpx.Client() as client:
+    with httpx.Client(headers=REQ_HEADERS) as client:
         response = client.get(api_url, timeout=10.0)
         # Check for 404 manually
         if response.status_code == 404:
@@ -435,7 +441,7 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
                 try: wm.progress_update(current_map)
                 except: has_progress = False
 
-            with httpx.Client() as client:
+            with httpx.Client(headers=REQ_HEADERS) as client:
                 with client.stream("GET", download_url, timeout=60.0) as response:
                     response.raise_for_status()
                     total_size = int(response.headers.get("content-length", 0))
@@ -633,7 +639,17 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
     """
     # Get asset info to find download URL
     api_url = f"https://api.polyhaven.com/files/{asset_id}"
-    # Aliases (PolyHaven typically uses 'gltf' key for both)
+    
+    with httpx.Client(headers=REQ_HEADERS) as client:
+        response = client.get(api_url, timeout=10.0)
+        if response.status_code == 404:
+            raise ValueError(f"Asset '{asset_id}' not found on PolyHaven.")
+        response.raise_for_status()
+        files = response.json()
+
+    format_lower = file_format.lower() if file_format else "blend"
+    
+    # Aliases
     if format_lower == "glb": 
         format_lower = "gltf"
 
@@ -661,6 +677,7 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
 
     # Get download URL
     download_url = None
+    files_to_download = {}  # { relative_path: url }
 
     if isinstance(format_data, dict):
         # Look for resolution keys (1k, 2k, 4k, 8k)
@@ -673,20 +690,23 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
                 # Now look for the format key again (nested structure)
                 if isinstance(res_data, dict):
                     # Try the format key itself
+                    main_key = None
                     if actual_format_key in res_data:
-                        file_info = res_data[actual_format_key]
-                        if isinstance(file_info, dict) and "url" in file_info:
-                            download_url = file_info["url"]
-                            print(f"[PolyHaven] Found URL at resolution {res_key}")
-                            break
+                        main_key = actual_format_key
+                    elif actual_format_key.lower() in res_data:
+                        main_key = actual_format_key.lower()
 
-                    # Also try lowercase version
-                    format_lower_key = actual_format_key.lower()
-                    if format_lower_key in res_data:
-                        file_info = res_data[format_lower_key]
+                    if main_key:
+                        file_info = res_data[main_key]
                         if isinstance(file_info, dict) and "url" in file_info:
                             download_url = file_info["url"]
                             print(f"[PolyHaven] Found URL at resolution {res_key}")
+                            
+                            # Collect included files (textures, etc.)
+                            if "include" in file_info and isinstance(file_info["include"], dict):
+                                for rel_path, include_info in file_info["include"].items():
+                                    if isinstance(include_info, dict) and "url" in include_info:
+                                        files_to_download[rel_path] = include_info["url"]
                             break
 
     if not download_url:
@@ -705,6 +725,7 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
 
     print(f"[PolyHaven] Downloading model: {asset_id} ({file_ext})...")
     print(f"[PolyHaven] Download URL: {download_url}")
+    print(f"[PolyHaven] Included files: {len(files_to_download)}")
 
     # Start progress bar
     wm = bpy.context.window_manager
@@ -713,11 +734,11 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
         try:
             wm.progress_begin(0, 100)
         except:
-             has_progress = False
+            has_progress = False
 
     try:
-        # Download main file
-        with httpx.Client() as client:
+        # 1. Download Main File
+        with httpx.Client(headers=REQ_HEADERS) as client:
             with client.stream("GET", download_url, timeout=120.0) as response:
                 response.raise_for_status()
                 total_size = int(response.headers.get("content-length", 0))
@@ -733,6 +754,24 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
                                 wm.progress_update(progress)
                             except:
                                 has_progress = False
+
+        # 2. Download Included Files (Textures)
+        for rel_path, url in files_to_download.items():
+            # Handle paths like "textures/foo.jpg"
+            target_path = os.path.join(download_dir, rel_path.replace("/", os.sep))
+            target_dir = os.path.dirname(target_path)
+            if not os.path.exists(target_dir):
+                os.makedirs(target_dir, exist_ok=True)
+            
+            print(f"[PolyHaven] Downloading included: {rel_path}...")
+            
+            with httpx.Client(headers=REQ_HEADERS) as client:
+                 # Simple download (no progress bar needed per file, or minimal)
+                 r = client.get(url, timeout=60.0)
+                 r.raise_for_status()
+                 with open(target_path, "wb") as f:
+                     f.write(r.content)
+
     finally:
         if has_progress:
              try:
@@ -746,14 +785,21 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
 
     if file_ext == 'blend':
         # Link from .blend file
-        with bpy.data.libraries.load(file_path, link=False) as (data_from, data_to):
-            data_to.objects = data_from.objects
+        try:
+            with bpy.data.libraries.load(file_path, link=False) as (data_from, data_to):
+                data_to.objects = data_from.objects
 
-        scene = bpy.context.scene
-        for obj in data_to.objects:
-            if obj is not None:
-                scene.collection.objects.link(obj)
-                imported_objects.append(obj)
+            scene = bpy.context.scene
+            for obj in data_to.objects:
+                if obj is not None:
+                    scene.collection.objects.link(obj)
+                    imported_objects.append(obj)
+        except Exception as e:
+            # If load fails, it might be due to missing libraries if not packed?
+            # But we downloaded the textures now!
+            print(f"Blend load error: {e}")
+            raise
+
     elif file_ext in ['gltf', 'glb']:
         bpy.ops.import_scene.gltf(filepath=file_path)
         imported_objects = bpy.context.selected_objects
@@ -763,6 +809,23 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
     elif file_ext == 'obj':
         bpy.ops.import_scene.obj(filepath=file_path)
         imported_objects = bpy.context.selected_objects
+    
+    # Ensure textures are packed (Critical for Blend files that reference external textures)
+    # The 'include' files we downloaded are in relative paths. 
+    # Blender 'Find Missing Files' might be needed if the paths aren't exactly what the .blend expects.
+    # But usually Polyhaven .blends are relative.
+    
+    # Attempt to use 'find_missing_files' logic if textures are pink?
+    # For now, just pack.
+    try:
+        bpy.ops.file.pack_all()
+    except Exception as e:
+        print(f"Warning: Failed to pack resources: {e}")
+        
+    if not imported_objects and file_ext != 'blend':
+        # Fallback if importers don't select objects
+        # This is tricky without tracking scene delta, but good enough for now
+        pass
 
     return {
         "success": True,
@@ -770,7 +833,7 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
         "asset_id": asset_id,
         "imported_count": len(imported_objects),
         "imported_names": [o.name for o in imported_objects],
-        "message": f"Downloaded and imported model '{asset_id}'."
+        "message": f"Downloaded and imported model '{asset_id}' with {len(files_to_download)} included files."
     }
 
 
@@ -895,6 +958,7 @@ def register():
         download_polyhaven,
         (
             "Download and Import an asset from PolyHaven.\n"
+            "RETURNS: {'status': 'success', 'files': [...], 'scene_changes': ...}\n"
             "USAGE:\n"
             "- HDRI: `asset_type='hdri'`, sets World Background.\n"
             "- Texture: `asset_type='texture'`, applies Material to Active Object.\n"

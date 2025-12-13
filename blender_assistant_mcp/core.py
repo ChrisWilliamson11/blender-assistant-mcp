@@ -214,24 +214,33 @@ class AssistantSession:
         self.history.append(msg)
         self.full_history.append(msg)
         
-        # Trigger Gradient Compression if history gets long
-        if len(self.history) > 20:
-            self.history = self.memory_manager.compact_history(
-                self.history, 
-                llm_client=self.agent_tools.llm_client
-            )
+        
+        # Trigger gradient compression (Managed by MemoryManager)
+        # We pass the user's preferred Context Window limit
+        max_ctx = 8192
+        try:
+             import bpy
+             max_ctx = bpy.context.preferences.addons[__package__].preferences.num_ctx
+        except:
+             pass
+
+        self.history = self.memory_manager.compact_history(
+            self.history, 
+            llm_client=self.agent_tools.llm_client,
+            max_ctx=max_ctx
+        )
         # Fallback pruning
         if len(self.history) > 50:
             self.history = self.history[-50:]
 
-    def get_system_prompt(self, enabled_tools: set) -> str:
+    def get_system_prompt(self, MCP_enabled_tools: set) -> str:
         """Build the system prompt based on enabled tools."""
         # Get Allowed tools (Universe) to filter hints correctly
-        allowed_tools = self.tool_manager.get_allowed_tools_for_role("MANAGER")
+        allowed_tools = self.tool_manager.get_allowed_tools_for_role("ASSISTANT")
         
         # Generate hints for disabled tools (SDK Mode support)
         # Sdk Hints = Allowed - Enabled
-        sdk_hints = self.tool_manager.get_system_prompt_hints(enabled_tools, allowed_tools=allowed_tools)
+        sdk_hints = self.tool_manager.get_system_prompt_hints(MCP_enabled_tools, allowed_tools=allowed_tools)
         #not injecting memory into system prompt as it seems to add confusion
         #memory_context = self.memory_manager.get_context() or "(No memories yet)"
         
@@ -243,9 +252,16 @@ class AssistantSession:
         include_protocol = len(self.history) <= 1
         protocol_section = self._load_protocol() if include_protocol else "Refer to protocol for behavioral rules."
 
-        return f"""You are the Manager Agent (The "Brain").
+        return f"""You are the Blender Assistant (The "Brain").
 
-        GOAL: Plan, delegate, and track complex Blender tasks. If the task is very simple (a 1-liner) complete it yourself with execute_code & bpy.
+        GOAL: Plan, delegate, and track complex Blender tasks. 
+        - SIMPLE TASKS: If the task is very simple (a 1-liner), complete it yourself with `execute_code`.
+        - COMPLEX TASKS: 
+            1. CREATE PLAN: Use `task_plan(tasks=[...])` to break the request into verifiable steps. 
+            2. DELEGATE: Pass the user's intent to `TASK_AGENT`.
+                **CRITICAL**: When spawning `TASK_AGENT`, if you have a plan, the query MUST be: "Execute items X to Y from the Task List" or "Execute ALL pending tasks". Do NOT just repeat the user's raw query if you have already planned it.
+        - VERIFICATION: If you delegated a task, you MUST delegate verification to `COMPLETION_AGENT`.
+        - COMPLETION PROTOCOL: If `spawn_agent(COMPLETION_AGENT)` returns a verification success, your job is DONE. Immediately report the result to the user and STOP.
         When using python for simple tasks, "Inline Code Execution" is available for efficiency. Feel free to write Python blocks (` ```python ... ``` `) directly in your response to run quick checks or simple actions without formal tool calls.
         Multiple code blocks will be processed one after the other, and the execution environment maintains a persistant state, so you could define a function in one code block then run it later from another for a real free-form thinking/coding experience.
         
@@ -253,18 +269,20 @@ class AssistantSession:
         {self.current_task_state if self.current_task_state else "(No active task state)"}
 
         CONTEXT:
-        - Memory: {memory_context}
         - {scene_context}
 
-        - **User**: The human manager.
-        - **Manager (You)**: The planner.
+        - **The Client**: The human user.
+        - **The Assistant (You)**: The planner & orchestrator.
         - **Task Agent**: (Role: `TASK_AGENT`) The worker. Use `spawn_agent(role="TASK_AGENT", ...)` for: **Web Search**, **Downloading Images**, **PolyHaven/Sketchfab Assets**, and rigorous Blender operations.
-        - **Completion Agent**: (Role: `COMPLETION_AGENT`) The verifier. Use `spawn_agent(role="COMPLETION_AGENT", ...)` to verify your work.
+        - **Completion Agent**: (Role: `COMPLETION_AGENT`) The verifier. Use `spawn_agent(role="COMPLETION_AGENT", ...)` to verify completion. REQUIRED after Task Agent finishes.
+        - **Scene Agent**: (Role: `SCENE_AGENT`) The researcher. Use `consult_scene_agent(query="...")` to get a textual summary of the scene state (materials, modifiers, etc) without manually inspecting everything.
 
         MCP TOOLS:
-        {json.dumps(list(enabled_tools), indent=2)}
+        {json.dumps(list(MCP_enabled_tools), indent=2)}
         
         {sdk_hints}
+
+        {self.tool_manager.get_common_behavior_prompt()}
 
         PROTOCOL & BEHAVIORAL RULES
         {protocol_section}"""
@@ -293,7 +311,7 @@ class AssistantSession:
         except Exception:
             return None
 
-    def process_response(self, response: Dict[str, Any], enabled_tools: set, usage: Dict = None) -> tuple[List[ToolCall], str]:
+    def process_response(self, response: Dict[str, Any], MCP_enabled_tools: set, usage: Dict = None) -> tuple[List[ToolCall], str]:
         """Process a raw response from the LLM."""
         # Extract thinking/content for history
         message = response.get("message", {})
@@ -319,7 +337,7 @@ class AssistantSession:
             
         valid_calls = []
         for call in calls:
-            if call.tool in enabled_tools or call.tool == "execute_code":
+            if call.tool in MCP_enabled_tools or call.tool == "execute_code":
                 valid_calls.append(call)
             elif call.tool == "python":
                 # Handle generic python blocks as execute_code

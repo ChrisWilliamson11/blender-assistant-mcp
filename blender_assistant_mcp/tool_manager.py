@@ -132,13 +132,12 @@ class ToolManager:
             "rag_query", "rag_get_stats"
         }
 
-        if role == "MANAGER":
+        if role == "ASSISTANT":
             return base_set.union(universal_tools).union({
                 # System / Planning
-                "task_add", "task_clear", "task_list", "task_update", "task_complete",
-                "spawn_agent",
+                "task_plan", "task_list", "task_clear", "spawn_agent",
                 # Inspection / Vision
-                "get_object_info", "get_scene_info", "inspect_data", "search_data",
+                "get_object_info", "get_scene_info", "search_data",
                 "capture_viewport_for_vision"
             })
         
@@ -147,7 +146,7 @@ class ToolManager:
                  # Blender
                 "create_collection", "delete_collection", "get_collection_info", 
                 "list_collections", "move_to_collection", "set_collection_color",
-                "get_object_info", "get_scene_info", "inspect_data", "search_data",
+                "get_object_info", "get_scene_info", "search_data",
                 "get_active", "get_selection", "select_by_type", "set_active", "set_selection",
                 # Polyhaven
                 "download_polyhaven", "search_polyhaven_assets", "get_polyhaven_asset_info",
@@ -160,14 +159,20 @@ class ToolManager:
                 "sketchfab_download", "sketchfab_login", "sketchfab_search",
                 "check_stock_photo_download", "download_stock_photo", "search_stock_photos",
                 # System
-                "finish_task"
+                "finish_task", "task_list", "task_complete"
             })
 
         elif role == "COMPLETION_AGENT":
             return base_set.union(universal_tools).union({
-                 "get_scene_info", "get_object_info", "inspect_data", "search_data", 
+                 "get_scene_info", "get_object_info", "search_data", 
                  "list_collections", "task_list",
                  "get_active", "get_selection"
+            })
+
+        elif role == "SCENE_AGENT":
+            return base_set.union(universal_tools).union({
+                "get_scene_info", "get_object_info", "inspect_data", "search_data",
+                "list_collections", "get_collection_info"
             })
             
         return set()
@@ -207,7 +212,7 @@ class ToolManager:
   1. **MCP Tools**: Call these using your built-in tool calling mechanism, using the format specified (e.g., `get_scene_info`).
   2. **Python Code**: Use `execute_code` to run scripts. Use this for `assistant_sdk.*` methods and raw `bpy` commands.
 - **FINDING TOOLS**: Do not guess tool names. Use `sdk_help` to find SDK methods (e.g., `sdk_help(tool_names=['web_search', 'polyhaven'])`), `rag_query` for docs, or `search_memory` for past solutions.
-- **SCENE AWARENESS**: 'SCENE UPDATES' provide a SUMMARY of changes (added/modified objects). Use `inspect_data` or `get_scene_info(detailed=True)` to fetch detailed properties (like vertices, modifiers, or custom props) if needed.
+- **SCENE AWARENESS**: 'SCENE UPDATES' provide a SUMMARY of changes. Use `get_scene_info(detailed=True)` for hierarchy. For complex data inspection, Use `consult_scene_agent`. Do NOT use `inspect_data` directly.
 - **CLEANUP**: Keep the scene organized. Use collections to group new objects.
 - **VERIFY**: Always verify your actions.
 - **TEST OVER GUESS**: If unsure about API behavior, write a small test script using `execute_code` instead of speculating.

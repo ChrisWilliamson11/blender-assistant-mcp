@@ -281,7 +281,8 @@ def register_tool(
     description: str,
     input_schema: Dict[str, Any],
     category: str = "Other",
-    requires_main_thread: bool = True
+    requires_main_thread: bool = True,
+    sdk_hint: str = None
 ):
     """Register a tool in the MCP registry.
 
@@ -298,7 +299,9 @@ def register_tool(
         "description": description,
         "inputSchema": input_schema,
         "category": category,
-        "requires_main_thread": requires_main_thread
+        "category": category,
+        "requires_main_thread": requires_main_thread,
+        "sdk_hint": sdk_hint
     }
     print(f"[MCP] Registered tool: {name} (category: {category}, main_thread={requires_main_thread})")
 
@@ -475,6 +478,11 @@ def get_tools_prompt_hint(enabled_tools: List[str] = None) -> str:
             lines.append(f"- {name}({args_str}): {desc}")
         else:
             lines.append(f"- {name}(): {desc}")
+            
+        # Add SDK Hint if present
+        hint = tool.get("sdk_hint")
+        if hint:
+            lines.append(f"  Usage: {hint}")
     header = "MCP TOOLS (Call directly):\n"
     return header + "\n".join(lines) if lines else "MCP TOOLS (Call directly):\n(none)"
 

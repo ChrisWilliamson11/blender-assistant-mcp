@@ -186,6 +186,36 @@ def get_preferences():
     return prefs_obj
 
 
+def get_llm_settings(context) -> dict:
+    """Get common LLM settings (context, gpu, thinking) from preferences."""
+    prefs = get_preferences() # Use robust getter
+    
+    # 1. Basic Settings
+    settings = {
+        "n_ctx": getattr(prefs, "num_ctx", 8192),
+        "n_gpu_layers": getattr(prefs, "gpu_layers", -1),
+        "n_batch": getattr(prefs, "batch_size", 256),
+        "temperature": getattr(prefs, "temperature", 0.7),
+        "keep_alive": getattr(prefs, "keep_alive", "5m"),
+        "debug_mode": getattr(prefs, "debug_mode", False),
+    }
+
+    # 2. Thinking Level Mapping (Enum -> API Value)
+    # Maps internal enum to Ollama 'think' parameter (or similar)
+    thinking_level = getattr(prefs, "thinking_level", "LOW")
+    
+    if thinking_level == "OFF":
+        # Pass nothing or explicit False depending on adapter
+        # For now, we omit 'think' to rely on default or disable it?
+        # Ollama without 'think' param simply doesn't enforce it.
+        pass
+    else:
+        # Pass the lower-case value (low, medium, high) as expected by some models/adapters
+        settings["think"] = thinking_level.lower()
+
+    return settings
+
+
 def infer_capabilities_from_name(model_name: str) -> dict:
     """Quickly infer model capabilities from name only (no HTTP request).
 
@@ -2085,7 +2115,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             icon="TRIA_DOWN" if self.show_section_tools else "TRIA_RIGHT",
             emboss=False,
         )
-        row.label(text="MCP Tools (MCP) - Increases Context", icon="TOOL_SETTINGS")
+        row.label(text="MCP Tools - Note: More Tools means more context bloat, which can reduce performance", icon="TOOL_SETTINGS")
         if self.show_section_tools:
             self._draw_tools_config(layout)
 
@@ -2239,7 +2269,23 @@ class ASSISTANT_OT_refresh_tool_config(bpy.types.Operator):
             item.name = name
             item.category = tool_data.get("category", "Other")
             item.description = tool_data.get("description", "")
-            item.expose_mcp = name in current_enabled or name == "execute_code"
+            # Default to FALSE for new tools (per user preference)
+            item.expose_mcp = False
+            
+            # Logic:
+            # 1. If currently enabled in JSON, keep enabled.
+            # 2. If JSON is empty (first run), enable ALL defaults? Or stick to False?
+            #    Let's stick to strict logic: Enabled only if explicitly in list, OR if list is empty (fresh install).
+            
+            if len(current_enabled) == 0:
+                # Fresh install/reset: Enable all (User can disable later)
+                # To be safer/cleaner, let's enable all initially so they see them.
+                item.expose_mcp = True
+            elif name in current_enabled:
+                item.expose_mcp = True
+            
+            # exception: always enable critical schema tools? No, execute_code is handled separately.
+
 
         # Sync to schema_tools
         _sync_tools_to_json(prefs)

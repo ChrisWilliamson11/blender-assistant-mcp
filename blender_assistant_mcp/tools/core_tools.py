@@ -133,8 +133,8 @@ def sdk_help(tool_name: str = None, tool_names: list[str] = None):
     Get help for specific tool(s) or SDK methods.
     
     Args:
-        tool_name: Single tool name (backward compatibility).
-        tool_names: List of tool names to retrieve schemas for (Batch Mode).
+        tool_name: (DEPRECATED) Single tool name.
+        tool_names: List of tool names to retrieve schemas for. ALWAYS USE THIS FOR BATCHING.
     """
     from .tool_registry import get_tool_schema, _TOOLS, get_tools_list
     
@@ -190,24 +190,32 @@ def sdk_help(tool_name: str = None, tool_names: list[str] = None):
             exposed_tools.add("sdk_help")
             
             tools_in_cat = []
+            
+            # Helper to check exposure
+            def is_exposed(t_name):
+                return t_name in exposed_tools or t_name in ["execute_code", "sdk_help", "spawn_agent", "finish_task"]
+
             for name, data in _TOOLS.items():
                 cat = data.get("category", "Other")
                 if cat.lower() == target_category.lower():
-                    # STRICT FILTER: Only show tools that are exposed as MCP
-                    if name in exposed_tools:
+                    # SHOW ALL TOOLS (Filtered or not)
+                    # But annotate if they are SDK-only
+                    if is_exposed(name):
                         tools_in_cat.append(name)
+                    else:
+                        tools_in_cat.append(f"{name} (SDK Only)")
                         
             if tools_in_cat:
                 return {
                     "category": target_category,
                     "tools": sorted(tools_in_cat),
-                    "hint": "Only exposed MCP tools are listed. For SDK methods, inspect `assistant_sdk` module via Python."
+                    "hint": "Tools marked '(SDK Only)' available via `assistant_sdk` but not as native prompt tools. Use `sdk_help(tool_name='...')` for usage."
                 }
             else:
                  return {
                     "category": target_category,
                     "tools": [],
-                    "hint": "No MCP tools exposed in this category. Check `assistant_sdk` for Python methods."
+                    "hint": "No tools found in this category. Check spelling or inspect `assistant_sdk` directly."
                 }
 
         # Schema Mode
@@ -256,20 +264,19 @@ def sdk_help(tool_name: str = None, tool_names: list[str] = None):
                     break
             
             # Use exposure status to refine the hint
-            if not is_exposed and tool_name_key not in ["execute_code", "sdk_help"]:
+            if not is_exposed and tool_name_key not in ["execute_code", "sdk_help", "spawn_agent", "finish_task"]:
                  tool_def["hint"] = (
-                    f"⚠️ SDK ONLY: This tool is NOT exposed as an MCP tool. "
-                    f"You MUST use `{sdk_path}(...)` via `execute_code`. "
-                    f"Attempting to call `{tool_name_key}` directly will FAIL."
+                    f"⚠️ SDK ONLY: This tool is hidden from the prompt. "
+                    f"Use `{sdk_path}(...)` via `execute_code`."
                 )
-            elif "hint" not in tool_def:
-                # Standard hint if exposed (optional SDK usage)
+                 tool_def["usage_method"] = "SDK (Python)"
+                 tool_def["python_sdk_usage"] = f"{sdk_path}(...)"
+            else:
                  tool_def["hint"] = (
-                    f"SDK Access: `{sdk_path}(...)`. "
-                    "You may call this tool directly or via Python code."
+                    f"✅ MCP TOOL: This tool is exposed. Call `{tool_name_key}(...)` directly."
                 )
-            
-            tool_def["python_sdk_usage"] = f"{sdk_path}(...)"
+                 tool_def["usage_method"] = "MCP"
+                 # No python_sdk_usage for Native tools to reduce clutter
             
             return tool_def
 
@@ -351,7 +358,9 @@ def register():
             "3. Use `print()` to output information for reasoning (stdout is captured).\n"
             "4. Define functions and classes for reuse in subsequent calls.\n\n"
             "BEST PRACTICE: Filter large data in Python before printing! "
-            "Don't dump 10,000 items; use `print(items[:5])` or `[i.name for i in items if ...]`."
+            "Don't dump 10,000 items; use `print(items[:5])` or `[i.name for i in items if ...]`.\n\n"
+            "RETURNS: A dictionary containing 'status', 'output' (stdout), and 'scene_changes' (a summary of objects added/removed/modified). "
+            "USE 'scene_changes' FOR VERIFICATION."
         ),
         input_schema={
             "type": "object",

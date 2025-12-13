@@ -83,12 +83,23 @@ def on_depsgraph_update(scene, depsgraph):
             for name in dirty_names:
                 session.scene_watcher.mark_dirty(name)
 
+@bpy.app.handlers.persistent
+def on_load_post(dummy):
+    """Handler to clear sessions when a new file is loaded (prevent context leaks)."""
+    global _sessions
+    print(f"[SessionManager] Clearing {_sessions} sessions due to file load.")
+    _sessions.clear()
+
 def register():
     """Register depsgraph handlers."""
     if on_depsgraph_update not in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.append(on_depsgraph_update)
+    if on_load_post not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(on_load_post)
 
 def unregister():
     """Unregister depsgraph handlers."""
     if on_depsgraph_update in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(on_depsgraph_update)
+    if on_load_post in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(on_load_post)

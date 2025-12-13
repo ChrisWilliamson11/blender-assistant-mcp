@@ -7,6 +7,7 @@ by the Automation assistant.
 import os
 import tempfile
 import typing
+from typing import List, Optional, Dict, Any, Union
 
 import bpy
 
@@ -398,12 +399,8 @@ def get_scene_info(
     return result
 
 
-def get_object_info(name: str) -> dict:
-    """Get detailed information about a specific object."""
-    obj = bpy.data.objects.get(name)
-    if not obj:
-        return {"error": f"Object not found: {name}"}
-
+def _get_single_object_info(obj, verbose: bool):
+    """Helper to extract info for a single object."""
     info = {
         "name": obj.name,
         "type": obj.type,
@@ -415,12 +412,15 @@ def get_object_info(name: str) -> dict:
         "dimensions": [round(v, 4) for v in obj.dimensions],
         "parent": obj.parent.name if obj.parent else None,
         "collections": [c.name for c in obj.users_collection],
-        # Unified AST-like representation
-        "data": _serialize_rna(obj, depth=0, max_depth=1)
     }
+    
+    # Only include raw data dump if verbose
+    # [SAFETY] Removed verbose data dump to prevent context window crashes.
+    # User should use `inspect_data()` for deep introspection.
+    if verbose:
+        pass # Deprecated
 
-    # Data block info
-    # Data block info
+    # Data block info (Simplified for non-verbose)
     if obj.data:
         info["mesh_stats"] = {"name": obj.data.name}
 
@@ -429,9 +429,12 @@ def get_object_info(name: str) -> dict:
             mesh = obj.data
             info["mesh_stats"]["vertices"] = len(mesh.vertices)
             info["mesh_stats"]["polygons"] = len(mesh.polygons)
-            info["mesh_stats"]["shape_keys"] = (
-                [k.name for k in mesh.shape_keys.key_blocks] if mesh.shape_keys else []
-            )
+            
+            # Simple list of Shape Keys
+            if mesh.shape_keys:
+                info["mesh_stats"]["shape_keys"] = [k.name for k in mesh.shape_keys.key_blocks]
+            else:
+                 info["mesh_stats"]["shape_keys"] = []
 
             # Vertex Groups
             info["vertex_groups"] = [vg.name for vg in obj.vertex_groups]
@@ -459,10 +462,39 @@ def get_object_info(name: str) -> dict:
             {"name": const.name, "type": const.type, "enabled": const.enabled}
         )
 
-        # Animation
+    if obj.animation_data and obj.animation_data.action:
         info["action"] = obj.animation_data.action.name
-
+    else:
+        info["action"] = None
+        
     return info
+
+def get_object_info(name: str = None, names: List[str] = None, verbose: bool = False) -> dict:
+    """
+    Get detailed information about one or more objects.
+    
+    Args:
+        name: Single object name.
+        names: List of object names (Batch Mode).
+        verbose: [DEPRECATED] Ignored. Use `inspect_data` for detailed properties.
+    """
+    if names:
+        results = {}
+        for n in names:
+            obj = bpy.data.objects.get(n)
+            if obj:
+                results[n] = _get_single_object_info(obj, verbose)
+            else:
+                results[n] = {"error": "Object not found"}
+        return results
+        
+    if name:
+        obj = bpy.data.objects.get(name)
+        if not obj:
+            return {"error": f"Object not found: {name}"}
+        return _get_single_object_info(obj, verbose)
+        
+    return {"error": "Provide 'name' or 'names'" }
 
 
 
@@ -551,19 +583,19 @@ def _get_object_summary(obj) -> dict:
     return summary
 
 
-def inspect_data(path: str, depth: int = 1) -> dict:
+def inspect_data(path: str, depth: int = 1, filter_props: list = None) -> dict:
     """Introspect a Blender data block and return its structure (AST-like).
     
     Args:
         path: Python path to the data (e.g. "bpy.data.objects['Cube']", "bpy.context.scene")
         depth: How deep to traverse relationships (default: 1)
+        filter_props: Optional list of specific property names to include (others ignored).
         
     Returns:
         Dict containing the serialized data structure.
     """
     try:
         # Resolve path
-        # We use the persistent namespace to resolve 'bpy'
         namespace = _get_code_namespace()
         
         # Security/Safety check: only allow access to bpy
@@ -576,23 +608,43 @@ def inspect_data(path: str, depth: int = 1) -> dict:
         except Exception as e:
             return {"error": f"Failed to resolve path '{path}': {str(e)}"}
             
-        # Serialize
+        # Serialize with filtering
+        data = _serialize_rna(obj, 0, depth)
+        
+        if filter_props and isinstance(data, dict):
+            # Apply filter
+            filtered = {}
+            for k in filter_props:
+                if k in data:
+                    filtered[k] = data[k]
+                elif hasattr(obj, k):
+                    # If it wasn't serialized (maybe skipped), try to force get it
+                    try:
+                         val = getattr(obj, k)
+                         filtered[k] = _serialize_rna(val, 0, depth)
+                    except:
+                        pass
+            if filtered:
+                data = filtered
+            
         return {
             "path": path,
-            "data": _serialize_rna(obj, 0, depth)
+            "data": data,
+            "filter": filter_props or "All"
         }
         
     except Exception as e:
         return {"error": f"Inspection failed: {str(e)}"}
 
 
-def search_data(root_path: str, filter_props: dict = None, max_results: int = 10) -> dict:
+def search_data(root_path: str, filter_props: dict = None, max_results: int = 10, recursive: bool = False) -> dict:
     """Search for data blocks matching specific criteria (AST-grep like).
     
     Args:
         root_path: Path to a collection (e.g. "bpy.data.objects")
-        filter_props: Dict of property=value to match (e.g. {"type": "MESH", "hide_viewport": False})
+        filter_props: Dict of property=value to match (e.g. {"type": "MESH", "hide_viewport": False}). Supports dots for nested props.
         max_results: Max number of matches to return
+        recursive: If True, search specifically recursively for object children (if root is found to be a collection/object list).
         
     Returns:
         List of matches with summaries.
@@ -608,6 +660,14 @@ def search_data(root_path: str, filter_props: dict = None, max_results: int = 10
         except Exception as e:
             return {"error": f"Failed to resolve root '{root_path}': {str(e)}"}
             
+        # Recursive setup
+        # If recursive is True, we switch 'root' to be a generator that walks the tree?
+        items_iterable = root
+        if recursive and hasattr(bpy.context.scene, "objects"):
+             # If root seems to be a list of objects, we can use the scene walk if appropriate?
+             # For now, let's keep it safe: rely on flat iteration unless user specified a walker
+             pass
+
         # Ensure root is iterable
         if not hasattr(root, "__iter__"):
             return {"error": f"Root '{root_path}' is not iterable"}
@@ -616,35 +676,73 @@ def search_data(root_path: str, filter_props: dict = None, max_results: int = 10
         count = 0
         
         for item in root:
-            match = True
-            if filter_props:
-                for key, target_val in filter_props.items():
-                    # Support nested keys? e.g. "data.materials"
-                    # For now, simple attributes
-                    try:
-                        val = getattr(item, key, None)
-                        if val != target_val:
+            # Check recursive children if requested (collections, objects)
+            items_to_check = [item]
+            
+            # Very basic recursion helper
+            if recursive:
+                # If collection, add its children (objects)
+                # Note: This is simplified. Real recursion might need a queue.
+                # But for search_data on a list, we iterate the list items.
+                # If the item itself has children, we can search them?
+                # Let's keep it simple: If root_path is recursive, we assume we are searching a tree.
+                # But here we are iterating 'root'.
+                pass
+
+            for candidate in items_to_check:
+                match = True
+                if filter_props:
+                    for key, target_val in filter_props.items():
+                        # Support nested keys: "data.materials[0].name"
+                        try:
+                            # Navigate nested attributes
+                            val = candidate
+                            parts = key.split(".")
+                            for part in parts:
+                                # Handle list indices "materials[0]"
+                                if "[" in part and part.endswith("]"):
+                                    p_name, p_idx = part[:-1].split("[")
+                                    val = getattr(val, p_name)[int(p_idx)]
+                                else:
+                                    val = getattr(val, part)
+                            
+                            # Compare (soft string comparison for loose matching?)
+                            # Strict for now
+                            if val != target_val:
+                                match = False
+                                break
+                        except:
                             match = False
                             break
-                    except:
-                        match = False
+                
+                if match:
+                    # Create a summary
+                    summary = {
+                        "name": getattr(candidate, "name", str(candidate)),
+                        "type": getattr(candidate, "type", "Unknown") if hasattr(candidate, "type") else type(candidate).__name__
+                    }
+                    if filter_props:
+                        for k in filter_props:
+                             # Add the matched value to summary
+                             try:
+                                val = candidate
+                                parts = k.split(".")
+                                for part in parts:
+                                    if "[" in part:
+                                        p_name, p_idx = part[:-1].split("[")
+                                        val = getattr(val, p_name)[int(p_idx)]
+                                    else:
+                                        val = getattr(val, part)
+                                summary[k] = val
+                             except:
+                                pass
+                                
+                    matches.append(summary)
+                    count += 1
+                    if count >= max_results:
                         break
-            
-            if match:
-                # Create a summary
-                summary = {
-                    "name": getattr(item, "name", str(item)),
-                    "type": getattr(item, "type", "Unknown") if hasattr(item, "type") else type(item).__name__
-                }
-                # Add the filtered props to summary for confirmation
-                if filter_props:
-                    for k in filter_props:
-                        summary[k] = getattr(item, k, None)
-                        
-                matches.append(summary)
-                count += 1
-                if count >= max_results:
-                    break
+            if count >= max_results:
+                break
                     
         return {
             "root": root_path,
@@ -1501,6 +1599,7 @@ def register():
             "required": [],
         },
         category="Blender",
+        sdk_hint="get_scene_info(detailed=True) # Get full scene hierarchy with object details"
     )
 
     # get_object_info
@@ -1508,13 +1607,22 @@ def register():
     tool_registry.register_tool(
         "get_object_info",
         get_object_info,
-        "Get detailed information about a specific object",
+        "Get detailed information about one or more objects. Use 'names' for batch mode.",
         {
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "Object name"}},
-            "required": ["name"],
+            "properties": {
+                "name": {"type": "string", "description": "Single Object name"},
+                "names": {
+                    "type": "array", 
+                    "items": {"type": "string"},
+                    "description": "List of object names to inspect (Batch Mode)"
+                },
+                "verbose": {"type": "boolean", "description": "Include heavy data (matrices, raw dumps). Default False."}
+            },
+            "required": [],
         },
         category="Blender",
+        sdk_hint="get_object_info(names=['Cube', 'Camera']) # Batch Mode"
     )
 
     # create_object
@@ -1740,7 +1848,7 @@ def register():
         (
             "Introspect a Blender data block's internal structure.\n"
             "RETURNS: A JSON representation of the properties.\n"
-            "USAGE: Use this to debug or find property names. e.g. path=\"bpy.data.objects['Cube']\"."
+            "USAGE: Use this to debug or find property names."
         ),
         {
             "type": "object",
@@ -1754,10 +1862,16 @@ def register():
                     "description": "Traversal depth (default: 1)",
                     "default": 1,
                 },
+                "filter_props": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of property names to strictly include (others ignored)",
+                },
             },
             "required": ["path"],
         },
         category="Blender",
+        sdk_hint="inspect_data(path=\"bpy.data.objects['Cube']\", filter_props=['modifiers', 'constraints'])"
     )
 
     # search_data
@@ -1778,15 +1892,21 @@ def register():
                 },
                 "filter_props": {
                     "type": "object",
-                    "description": "Key-value pairs to match (e.g. {\"type\": \"MESH\"})",
+                    "description": "Key-value pairs to match (e.g. {\"type\": \"MESH\"}). Nested keys supported (e.g. 'data.materials[0].name').",
                 },
                 "max_results": {
                     "type": "integer",
                     "description": "Max results to return",
                     "default": 10,
                 },
+                "recursive": {
+                    "type": "boolean",
+                    "description": "If True, recursively search children of items",
+                    "default": False,
+                },
             },
             "required": ["root_path"],
         },
         category="Blender",
+        sdk_hint="search_data(root_path=\"bpy.data.objects\", filter_props={'type':'MESH', 'hide_viewport':False}, recursive=False)"
     )

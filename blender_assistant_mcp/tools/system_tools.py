@@ -26,6 +26,25 @@ def spawn_agent(role: str, query: str, focus_object: str = None) -> Dict[str, An
     if not hasattr(session, "agent_tools"):
         return {"error": "Session agent tools not initialized."}
         
+    # Update State
+    session.current_task_state = f"Delegating to {role}: {query}"
+    
+    # HALLUCINATION GUARDRAIL (V8.3)
+    # If the Assistant tries to 'Execute Plan' but the plan is empty, reject it.
+    if role == "TASK_AGENT" and ("task" in query.lower() or "plan" in query.lower()):
+        # Check active tasks
+        wm = bpy.context.window_manager
+        if wm.assistant_active_chat_index >= 0 and wm.assistant_active_chat_index < len(wm.assistant_chat_sessions):
+             tasks = wm.assistant_chat_sessions[wm.assistant_active_chat_index].tasks
+             if len(tasks) == 0:
+                 return {
+                     "error": (
+                         "TASK_PLAN_EMPTY: You are trying to execute a task list, but the list is EMPTY. "
+                         "This is a hallucination. You must call `task_plan` to create tasks BEFORE you can execute them. "
+                         "Please create a plan first."
+                     )
+                 }
+
     # Delegate to the AgentTools instance
     # NOTE: The instance method starts a background thread and returns metadata
     if hasattr(session.agent_tools, "spawn_agent"):
@@ -41,10 +60,38 @@ def finish_task(expected_changes: List[str], summary: str = "") -> Dict[str, Any
         expected_changes: List of strings describing what changed (e.g. "Added Cube").
         summary: Brief summary of what was done.
     """
+    # Update Session State
+    from ..session_manager import get_session
+    session = get_session(bpy.context)
+    if session:
+        session.current_task_state = f"DONE: {summary}"
+
     return {
         "status": "DONE",
         "summary": summary,
         "expected_changes": expected_changes
+    }
+
+def update_task(status: str, summary: str = "") -> Dict[str, Any]:
+    """
+    Update your current task status to stay focused and prevent drift.
+    
+    Args:
+        status: Short status (e.g. "Downloading Assets", "Refining Mesh").
+        summary: Longer description of current phase.
+    """
+    from ..session_manager import get_session
+    session = get_session(bpy.context)
+    if session:
+        # Format: "Working on: [Status] - [Summary]"
+        state_str = f"Working on: {status}"
+        if summary:
+            state_str += f" - {summary}"
+        session.current_task_state = state_str
+        
+    return {
+        "status": "UPDATED", 
+        "current_state": session.current_task_state if session else "Unknown"
     }
 
 def register():
@@ -59,6 +106,8 @@ def register():
             "Asset Retrieval (Polyhaven, Web), and scene organization. Use for all heavy lifting.\n"
             "- COMPLETION_AGENT: The 'Checker'. specialized in inspecting the scene, verifying properties, "
             "and ensuring requirements are met. Use to validate work before marking a task DONE.\n"
+            "- SCENE_AGENT: The 'Researcher'. Specialized in investigating the scene state (materials, objects, properties) "
+            "to answer queries. Use for checking 'What is X?' or 'Where is Y?'.\n"
             "RETURNS: Final Report {'status': 'DONE'|'ERROR', 'summary': '...', 'expected_changes': [...]}\n"
             "BEHAVIOR: Blocking call. Returns when agent finishes. Use 'expected_changes' to update your plan."
         ),
@@ -104,6 +153,25 @@ def register():
                 }
             },
             "required": ["expected_changes"]
+        },
+        category="System",
+        requires_main_thread=False
+    )
+
+    tool_registry.register_tool(
+        name="update_task",
+        func=update_task,
+        description=(
+            "Update your current task status. usage: 'Working on: [Goal] - [Phase]'.\n"
+            "Call this tool to keep yourself focused and prevent drift during long chains of thought."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "Short status (e.g. 'Researching', 'Modeling')."},
+                "summary": {"type": "string", "description": "Longer context of what you are doing."}
+            },
+            "required": ["status"]
         },
         category="System",
         requires_main_thread=False

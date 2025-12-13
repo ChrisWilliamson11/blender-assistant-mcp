@@ -878,6 +878,8 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
         elif item.role == "Tool":
             # Tool messages - darkest
             row.emboss = "NORMAL"
+            n = item.tool_name if item.tool_name else "Output"
+            display_role = f"Tool ({n})"
         elif item.role == "Thinking" or item.role == "thinking":
             # Thinking - italic/subtle
             row.emboss = "NONE"
@@ -1354,6 +1356,17 @@ class ASSISTANT_OT_copy_debug_conversation(bpy.types.Operator):
         header.append(f"Ollama running: {ollama_running}")
         header.append("")
         header.append(f"Chat: {session.name} ({len(session.messages)} messages)")
+        
+        # DEBUG: Include Scene Agent Prompt for inspection
+        try:
+             from .scene_agent import SCENE_AGENT_PROMPT
+             header.append("")
+             header.append("[SCENE AGENT PROMPT PREVIEW]")
+             header.append(SCENE_AGENT_PROMPT[:500] + "... (truncated)" if len(SCENE_AGENT_PROMPT) > 500 else SCENE_AGENT_PROMPT)
+             header.append("")
+        except ImportError:
+             pass
+
         header.append("-----")
 
         lines = []

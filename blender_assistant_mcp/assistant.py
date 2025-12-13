@@ -204,34 +204,31 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         
         
         # Get fresh enabled tools from preferences
-        enabled_tools = session.tool_manager.get_enabled_tools_for_role(
-            "MANAGER", preferences=prefs
+        MCP_enabled_tools = session.tool_manager.get_enabled_tools_for_role(
+            "ASSISTANT", preferences=prefs
         )
         
         if debug_mode:
-             print(f"[Debug] Session Enabled Tools: {enabled_tools}")
+             print(f"[Debug] Session Enabled Tools: {MCP_enabled_tools}")
         
         # Build system prompt with current tools
-        system_prompt = session.get_system_prompt(enabled_tools)
+        system_prompt = session.get_system_prompt(MCP_enabled_tools)
         
         # Prepare tools for OpenAI format
-        tools = session.tool_manager.get_openai_tools(enabled_tools)
+        tools = session.tool_manager.get_openai_tools(MCP_enabled_tools)
         
         keep_alive = getattr(prefs, "keep_alive", "5m")
         
-        # Extract advanced GPU/Context settings
-        kwargs = {
-            "n_ctx": getattr(prefs, "num_ctx", 8192),
-            "n_gpu_layers": getattr(prefs, "gpu_layers", -1),
-            "n_batch": getattr(prefs, "batch_size", 256),
-            "temperature": getattr(prefs, "temperature", 0.7),
-            "top_k": getattr(prefs, "top_k", 40),
-            "top_p": getattr(prefs, "top_p", 0.9),
-            "repeat_penalty": getattr(prefs, "repeat_penalty", 1.1),
-            "seed": getattr(prefs, "seed_value", 42) if getattr(prefs, "use_seed", False) else None,
-            "keep_alive": keep_alive,
-            "debug_mode": debug_mode
-        }
+        # Unified settings
+        from .preferences import get_llm_settings
+        kwargs = get_llm_settings(context)
+        
+        # Override specific to main loop if needed, but get_llm_settings is the source of truth
+        # Add non-setting kwargs
+        kwargs["seed"] = getattr(prefs, "seed_value", 42) if getattr(prefs, "use_seed", False) else None
+        kwargs["top_k"] = getattr(prefs, "top_k", 40)
+        kwargs["top_p"] = getattr(prefs, "top_p", 0.9)
+        kwargs["repeat_penalty"] = getattr(prefs, "repeat_penalty", 1.1)
 
         self._thread = threading.Thread(
             target=self._http_worker,
@@ -293,24 +290,65 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                                     raw_role = msg_data.get("role", "System")
                                     
                                     # Normalize for UI (User Request: "User")
+                                    
+                                    # Normalize for UI (User Request: "User")
                                     if raw_role == "user" or raw_role == "You":
                                         new_msg.role = "User"
                                     elif raw_role == "assistant":
                                         new_msg.role = "Assistant"
+                                    elif raw_role == "tool":
+                                        new_msg.role = "Tool"
                                     elif raw_role == "thinking":
                                         new_msg.role = "Thinking"
                                     else:
-                                        new_msg.role = raw_role
+                                        # Normalize special roles like TASK_AGENT -> Task Agent
+                                        new_msg.role = raw_role.replace("_", " ").title()
                                         
-                                    new_msg.content = msg_data.get("content", "")
+                                    new_msg.tool_name = msg_data.get("name", "")
+                                    
+                                    # Content Logic (Fix Blank Messages)
+                                    content = msg_data.get("content", "")
+                                    tool_calls = msg_data.get("tool_calls", [])
+                                    
+                                    
+                                    if not content and tool_calls:
+                                        # Generate a summary for the UI since it doesn't support structured tool calls yet
+                                        import json
+                                        # Format as code block for better visibility as requested
+                                        try:
+                                            # Clean up for display (remove massive args if needed? No, user wants details)
+                                            # If tool_calls has objects/ToolCall class, dumping might fail.
+                                            # session_manager.py logic stores them as dicts in full_history usually?
+                                            # Let's check type. 'msg_data' comes from 'full_history'.
+                                            # core.py 'add_message' stores 'tool_calls' as pass-through.
+                                            # The LLM parser produces ToolCall objects.
+                                            # We need to convert ToolCall objects to dicts if they aren't already.
+                                            
+                                            display_calls = []
+                                            for tc in tool_calls:
+                                                if hasattr(tc, "tool") and hasattr(tc, "args"):
+                                                    display_calls.append({"tool": tc.tool, "args": tc.args})
+                                                elif isinstance(tc, dict):
+                                                    display_calls.append(tc)
+                                                else:
+                                                    display_calls.append(str(tc))
+                                            
+                                            dump = json.dumps(display_calls, indent=2)
+                                            content = f"```json\n{dump}\n```"
+                                        except:
+                                            content = "🛠️ [Calling Tools...]"
+                                            
+                                    new_msg.content = content
                                     
                                     # Sync usage metrics
                                     if "usage" in msg_data:
                                         import json
                                         new_msg.usage = json.dumps(msg_data["usage"])
                                     
-                                # Scroll to bottom on new content
-                                wm.assistant_chat_message_index = len(session_ui.messages) - 1
+                                # Scroll to bottom ONLY for major events (User, Assistant, Agents)
+                                # Ignore "Thinking" and "Tool" messages to prevent UI jumpiness
+                                if new_msg.role in {"User", "Assistant", "Task Agent", "Completion Agent", "Scene Agent", "Error"}:
+                                    wm.assistant_chat_message_index = len(session_ui.messages) - 1
                                 
                     except Exception as e:
                         print(f"Failed to sync history to UI: {e}")
@@ -336,7 +374,7 @@ class ASSISTANT_OT_send(bpy.types.Operator):
                         # Process response
                         try:
                             prefs = context.preferences.addons[__package__].preferences
-                            enabled_tools = session.tool_manager.get_enabled_tools_for_role("MANAGER", preferences=prefs)
+                            enabled_tools = session.tool_manager.get_enabled_tools_for_role("ASSISTANT", preferences=prefs)
                         except:
                             enabled_tools = set()
                         
@@ -345,14 +383,17 @@ class ASSISTANT_OT_send(bpy.types.Operator):
 
                         tool_calls, thinking = session.process_response(self._response, enabled_tools, usage=usage)
                         
-                        if thinking:
-                            self._add_message("Thinking", thinking, usage=usage)
+
+                        
+                        # thinking is added to session history by report_thinking via process_response
+                        # We do NOT add it manually here to avoid duplicates during UI sync
+
                         
                         # Add assistant message to UI
                         msg = self._response.get("message", {})
                         content = msg.get("content", "")
-                        if content:
-                            self._add_message("Assistant", content, usage=usage)
+                        # process_response handles adding to history. UI Sync will pick it up.
+                        # We do NOT add manually here.
                             
                         if tool_calls:
                             session.tool_queue = tool_calls
@@ -505,7 +546,7 @@ class ASSISTANT_OT_view_request_payload(bpy.types.Operator):
         lines.append("")
         
         # MANAGER
-        lines.append(">>> MANAGER AGENT <<<")
+        lines.append(">>> ASSISTANT AGENT <<<")
         lines.append("-" * 30)
         lines.append("SYSTEM PROMPT:")
         lines.append(system_prompt)

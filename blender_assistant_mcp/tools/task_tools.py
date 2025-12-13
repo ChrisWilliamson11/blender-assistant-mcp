@@ -157,6 +157,39 @@ def task_clear(reason: str = "") -> Dict[str, Any]:
     msg = f"Task list cleared. Reason: {reason}" if reason else "Task list cleared."
     return {"success": True, "message": msg}
 
+def task_plan(tasks: List[str]) -> Dict[str, Any]:
+    """Set the entire task list in one go (clears existing).
+    
+    Args:
+        tasks: List of task descriptions (strings)
+        
+    Returns:
+        Dict with status from initialization
+    """
+    wm = bpy.context.window_manager
+    if not wm.assistant_chat_sessions:
+        return {"success": False, "error": "No active chat session found."}
+        
+    task_storage = _get_active_task_list()
+    if task_storage is None:
+        return {"success": False, "error": "Could not access task list."} # Should not happen if session exists
+        
+    task_storage.clear()
+    
+    added_tasks = []
+    
+    for desc in tasks:
+        item = task_storage.add()
+        item.name = desc
+        item.status = "TODO"
+        added_tasks.append(desc)
+        
+    return {
+        "success": True, 
+        "message": f"Plan initialized with {len(added_tasks)} tasks.",
+        "tasks": added_tasks
+    }
+
 # -----------------------------------------------------------------------------
 # Registration
 # -----------------------------------------------------------------------------
@@ -170,10 +203,33 @@ def register():
     
     # Register Tools
     tool_registry.register_tool(
+        "task_plan",
+        task_plan,
+        (
+            "Initialize a full multi-step plan. CLEARS existing tasks.\n"
+            "USAGE: tasks=['Download Model', 'Place Model', 'Set Material']\n"
+            "RETURNS: {'success': True, 'tasks': [...]}"
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of task descriptions"
+                }
+            },
+            "required": ["tasks"]
+        },
+        category="Planning",
+        sdk_hint="⚠️ SDK ONLY: This tool is hidden from the prompt. Use `assistant_sdk.task.task_plan(...)` via `execute_code`."
+    )
+
+    tool_registry.register_tool(
         "task_add",
         task_add,
         (
-            "Add a new task to your plan.\n"
+            "Add a single task to the end of the list.\n"
             "USAGE: Description='Create Cube'. Adds to TODO list.\n"
             "RETURNS: {'success': True, 'task_index': 0}"
         ),
@@ -184,7 +240,8 @@ def register():
             },
             "required": ["description"]
         },
-        category="Planning"
+        category="Planning",
+        sdk_hint="⚠️ SDK ONLY: Hidden. Use `assistant_sdk.task.task_add(...)` via `execute_code`."
     )
     
     tool_registry.register_tool(
@@ -204,7 +261,8 @@ def register():
             },
             "required": ["index", "status"]
         },
-        category="Planning"
+        category="Planning",
+        sdk_hint="⚠️ SDK ONLY: Hidden. Use `assistant_sdk.task.task_update(...)` via `execute_code`."
     )
 
     tool_registry.register_tool(
@@ -221,7 +279,8 @@ def register():
             },
             "required": ["index"]
         },
-        category="Planning"
+        category="Planning",
+        sdk_hint="⚠️ SDK ONLY: Hidden. Use `assistant_sdk.task.task_complete(...)` via `execute_code`."
     )
     
     tool_registry.register_tool(
@@ -237,7 +296,8 @@ def register():
             "properties": {},
             "required": []
         },
-        category="Planning"
+        category="Planning",
+        sdk_hint="⚠️ SDK ONLY: Hidden. Use `assistant_sdk.task.task_list(...)` via `execute_code`."
     )
     
     tool_registry.register_tool(
@@ -254,7 +314,8 @@ def register():
             },
             "required": []
         },
-        category="Planning"
+        category="Planning",
+        sdk_hint="⚠️ SDK ONLY: Hidden. Use `assistant_sdk.task.task_clear(...)` via `execute_code`."
     )
 
 def unregister():

@@ -286,9 +286,44 @@ def chat_completion(
         if "message" in result:
             content = result["message"].get("content", "")
             tool_calls = result["message"].get("tool_calls", [])
-
+            
+            # Extract Thinking Tags (Non-Streaming)
+            thinking = ""
+            
+            # Check for structured reasoning fields (DeepSeek R1 / Azure / OpenAI variants)
+            if "reasoning_content" in result["message"]:
+                 thinking = result["message"]["reasoning_content"]
+            elif "reasoning" in result["message"]:
+                 thinking = result["message"]["reasoning"]
+            
+            # Fallback to tag parsing if no structured field
+            if not thinking and ("<think>" in content and "</think>" in content):
+                try:
+                    start_tag = "<think>"
+                    end_tag = "</think>"
+                    start_idx = content.find(start_tag)
+                    end_idx = content.find(end_tag)
+                    
+                    if start_idx != -1 and end_idx != -1:
+                        # Extract thinking
+                        thinking = content[start_idx + len(start_tag) : end_idx]
+                        
+                        # Remove from content (keep valid JSON or text)
+                        # We remove the entire block including tags
+                        pre_think = content[:start_idx]
+                        post_think = content[end_idx + len(end_tag):]
+                        content = (pre_think + post_think).strip()
+                        
+                        # Update raw message content
+                        result["message"]["content"] = content
+                except Exception as e:
+                    print(f"[Ollama Adapter] Failed to parse thinking tags: {e}")
+            
+            # Ensure thinking is set in message for downstream
+            if thinking:
+                result["message"]["thinking"] = thinking
             print(
-                f"[Ollama Adapter] Got content: {len(content)} chars, {len(tool_calls) if tool_calls else 0} tool calls"
+                f"[Ollama Adapter] Got content of length {len(content)}. 'Thinking' extracted: '{thinking[:50]}...'"
             )
 
             return {

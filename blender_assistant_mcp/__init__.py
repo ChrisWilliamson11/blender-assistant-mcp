@@ -42,6 +42,7 @@ from . import (
     assistant_sdk,
     skills,
     session_manager,
+    scene_agent,
 )
 
 # Module list for registration
@@ -62,6 +63,7 @@ _modules = [
     system_tools,
     skills,
     session_manager,
+    scene_agent,
     assistant,
 ]
 

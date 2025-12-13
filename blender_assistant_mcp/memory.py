@@ -145,24 +145,32 @@ Abstract:"""
              
         return None
 
-    def compact_history(self, history: List[Dict[str, str]], llm_client: Any, model_name: str = "gpt-oss:20b") -> List[Dict[str, str]]:
+    def compact_history(self, history: List[Dict[str, str]], llm_client: Any, model_name: str = "gpt-oss:20b", max_ctx: int = 8192) -> List[Dict[str, str]]:
         """
         Compress context using 'Gradient Summarization'.
         
         Policy:
-        - Trigger: If len(history) > 20.
+        - Trigger: If len(history) > 20 OR estimated tokens > 80% of context.
         - Preserve: Index 0 (Initial User Request).
-        - Compress: Index 1-11 (Oldest 10 messages after first).
-        - Keep: Index 11+ (Recent context).
         """
-        if len(history) <= 20:
+        # Heuristic token estimation (Char count / 3.5)
+        est_tokens = sum(len(str(m.get('content', ''))) for m in history) / 3.5
+        
+        # Trigger if messages > 20 OR tokens > 75% of context
+        trigger_limit = max_ctx * 0.75
+        should_compact = len(history) > 20 or est_tokens > trigger_limit
+        
+        if not should_compact:
             return history
             
-        print("[MemoryManager] Compressing history (Gradient Summarization)...")
+        print(f"[MemoryManager] Compressing history. Est Tokens: {int(est_tokens)}/{max_ctx} (Trigger: {len(history)} msgs)")
         
-        first_msg = history[0]
-        to_compress = history[1:11]
-        remaining = history[11:]
+        # Policy Update: Do NOT pin the first message. 
+        # If the user changes context (e.g. "Do X", then "Do Y"), pinning "Do X" causes loops.
+        # We compress the oldest chunk, period.
+        
+        to_compress = history[0:10]
+        remaining = history[10:]
         
         # Format for summarization
         chunk_text = ""
@@ -186,8 +194,9 @@ Abstract:"""
             )
             summary = response.get("content", "").strip()
         except Exception as e:
-            print(f"[MemoryManager] Compression Failed: {e}")
-            return history # Fail safe
+            print(f"[MemoryManager] Compression Failed (LLM Error): {e}")
+            # Fallback: Force prune without summary to avoid context death spiral
+            summary = "[System: Context Compressed (Summary Generation Failed)]"
             
         summary_msg = {
             "role": "system", 
@@ -195,6 +204,6 @@ Abstract:"""
         }
         
         # Return new history structure
-        new_history = [first_msg, summary_msg] + remaining
+        new_history = [summary_msg] + remaining
         print(f"[MemoryManager] Compressed {len(history)} -> {len(new_history)} messages.")
         return new_history
