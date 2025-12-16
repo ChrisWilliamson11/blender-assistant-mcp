@@ -55,70 +55,39 @@ class AgentTools:
             "TASK_AGENT": Agent(
                 name="TASK_AGENT",
                 description="General Purpose Worker Agent. Can execute code, use Blender, search Web, download assets, etc.",
-                system_prompt="""You are the Task Agent. Your job is to EXECUTE the task given by the Manager.
+                system_prompt="""You are the Scene Builder Agent (Worker).
                 
-                PROCESS:
-                - PLAN FIRST: If the task is complex, use `task_plan` to break it down.
-                - BE CONCISE: Keep your 'thought' field short. Long thoughts cause JSON errors.
-                - NO MARKDOWN IN JSON: Do not put code blocks (```) inside the JSON string values.
+                YOUR GOAL: Execute the specific instructions given by the Orchestrator.
                 
-                1. ANALYZE: Understand the specific task.
-                2. PLAN: If complex, break down into steps.
-                3. EXECUTE: Use tools to achieve the goal.
-                4. VERIFY: Check if your actions worked (Read the 'scene_changes' in the Tool Result).
-                5. REPORT: Return `expected_changes` JSON summary when done.
+                RULES:
+                1. **DO NOT PLAN**: The Orchestrator has already planned. Do not create new task lists.
+                2. **DO NOT SEARCH**: Unless explicitly told to "find X", assume the Orchestrator provided the correct object names/IDs.
+                3. **WRITE CODE**: Your primary tool is `execute_code`. Write standard `bpy` scripts.
+                4. **COMPLETION**: When you have executed the instruction, call `finish_task`.
                 
                 RESPONSE FORMAT:
-                You MUST return a JSON object with a 'thought' field explaining your reasoning, and either 'tool_call', 'code', or 'expected_changes'.
-                Example:
                 {
-                    "thought": "I need to find the object. I will use get_scene_info...",
-                    "tool_call": { ... }
-                }
-
-                RULES:
-                - BACKGROUND PROCESS: You are running in a non-interactive loop. Use tools to interact with the system.
-                - TASK LIST PROTOCOL: **CRITICAL**: Start by calling `task_list`. Do NOT rely solely on the query string. If tasks exist, work through them sequentially. Mark items as IN_PROGRESS or DONE using `task_update`.
-                - BATCHING: Do NOT stop after one task. Execute ALL pending tasks in the list until blocked.
-                - CODING GUIDELINES:
-                    - DEFENSIVE CODING: Check `if obj.name in collection.objects:` before `unlink`. Avoid assumptions about object state.
-                    - ERROR HANDLING: If a tool fails, report it in JSON. Do NOT panic and output raw text.
-                - COMPLETION PROTOCOL: When satisfied (or all tasks DONE), you MUST call `finish_task` with a summary. This is the only way to report success.
-                - VERIFICATION PROTOCOL: Inspect `scene_changes` in the tool result first. If it confirms the action (e.g. 'added': [...]), you are DONE. Do NOT call `get_scene_info` unless the result is ambiguous. 
-                - MISSING INFO PROTOCOL: If critical information is missing, use `finish_task` to report the gap and request user input.
-                - Use `sdk_help` to learn tool usage.
-                - If a tool fails, try a different parameter."""
+                    "thought": "Writing code to add cube...",
+                    "tool_call": { "name": "execute_code", "arguments": { "code": "import bpy..." } }
+                }"""
             ),
             "COMPLETION_AGENT": Agent(
                 name="COMPLETION_AGENT",
                 description="Specializes in verifying if the user's request is fully satisfied.",
-                system_prompt="""You are the Completion Agent. 
+                system_prompt="""You are the Quality Control Agent (Reviewer).
                 
-                - Do NOT guess. If unsure, use `inspect_data` or `get_scene_info` to find the truth.
-                - If a check fails, report the specific property that mismatch.
-                - When checks pass, calling `finish_task` is MANDATORY.
-
-                CONTEXT SAFETY:
-                - Do NOT call `get_object_info(verbose=True)` for everything. Use `get_scene_info` for high-level checks.
-                - For deep inspection, use `consult_scene_agent`.
+                YOUR GOAL: Verify that the `TASK_AGENT`'s work matches the User's Request.
                 
-                REPORTING FORMAT (When Step 3 is reached):
-                1. IF COMPLETE:
-                {
-                    "expected_changes": {"status": "COMPLETE"}
-                }
-                
-                2. IF INCOMPLETE:
-                {
-                    "expected_changes": {"status": "INCOMPLETE", "missing": ["X"]}
-                }
-                
+                PROCESS:
+                1. INSPECT: Use `get_scene_info` or `search_scene_objects` to verify the state.
+                2. EVALUATE: Does the scene match the requirement?
+                3. REPORT: 
+                   - AS PASS: `finish_task(status='COMPLETE')`
+                   - AS FAIL: `finish_task(status='INCOMPLETE', missing=['...'])`
+                   
                 RULES:
-                - CONTEXT SAFETY: **CRITICAL**: Do NOT use `get_object_info(verbose=True)` for multiple objects or validation. It dumps massive data and crashes the session. Use `inspect_data` for specific properties if needed.
-                - EVIDENCE REQUIREMENT: Base all decision on concrete tool outputs (e.g. `get_object_info` default mode).
-                - CHECK HISTORY: Before searching blindly, READ the 'scene_changes' or 'expected_changes' from the Task Agent's output in the chat history. If the object is listed there, verify it specifically.
-                - TASK LIST PROTOCOL: Use `task_list` to see the "Plan of Record". Verify EACH item marked DONE.
-                - INCOMPLETION PROTOCOL: If verification fails or data is missing, report as INCOMPLETE with details."""
+                - Do NOT fix bugs. Only report them.
+                - Be fast. One or two checks max."""
             ),
             "SCENE_AGENT": Agent(
                 name="SCENE_AGENT",
@@ -261,53 +230,65 @@ You are collaborating with a human USER who is also editing the scene live.
                      current_messages.insert(0, {"role": "system", "content": full_system_prompt})
 
 
-                # LLM Request
-                # Prepare kwargs from settings
-                kwargs = {
-                     "stream": True,
-                     "tools": tools,
-                     "model_path": model_to_use,
-                     "messages": current_messages
-                }
+                # LLM Request with Smart Retry (DeepCode Strategy)
+                max_retries = 3
+                response = {}
                 
-                # Check thinking preference
+                # Check thinking preference once
                 prefs = self.preferences.get_preferences()
                 if prefs.enforce_json:
                     kwargs["format"] = "json"
-                
+
                 # Merge unified settings
                 if llm_settings:
-                    # Map settings to chat_completion arguments
-                    # standard: temperature, n_ctx
-                    # adapter-specific (passed via **kwargs handling in adapter? no, adapter takes specific args)
-                    # Checking chat_completion signature in Core or Adapter? 
-                    # Adapter `chat_completion` accepts `**kwargs`.
-                    # We pass the settings dict as kwargs.
                     kwargs.update(llm_settings)
-                    
-                    # Force agent-specific overrides if needed (e.g. lower temp for tasks)
-                    # But user preference should arguably rule. 
-                    # For now, let's respect global preference unless it's unset.
+                    # Default temp if not set
                     if "temperature" not in llm_settings:
                         kwargs["temperature"] = 0.2
                 else:
                     kwargs["temperature"] = 0.2
 
-                response = self.llm_client.chat_completion(**kwargs)
-                
-                # CRITICAL: Check for LLM errors (e.g. Ollama offline)
-                if response.get("error"):
-                    err_msg = response["error"]
-                    print(f"[AgentTools] [AGENT: {role}] LLM Error: {err_msg}")
-                    if self.message_callback:
-                        self.execute_in_main_thread(
-                            self.message_callback, 
-                            "system", 
-                            f"FATAL ERROR: LLM Request Failed: {err_msg}", 
-                            name="System"
-                        )
-                    # Abort loop
-                    return
+                # Retrieve base limits (fuzzy, assuming 4096 output if not set)
+                base_predict = kwargs.get("num_predict", 4096)
+                base_temp = kwargs.get("temperature", 0.2)
+
+                for attempt in range(max_retries):
+                    if attempt > 0:
+                        print(f"[AgentTools] [AGENT: {role}] LLM Failure. Retrying {attempt}/{max_retries} with reduced limits...")
+                        # 1. Reduce Output Tokens (num_predict) to save context
+                        # Attempt 1: 80%, Attempt 2: 60%
+                        reduction_factor = 0.9 if attempt == 1 else 0.8
+                        new_predict = int(base_predict * reduction_factor)
+                        kwargs["num_predict"] = new_predict
+                        kwargs["max_tokens"] = new_predict # For OpenAI compat
+
+                        # 2. Lower Temperature for stability
+                        new_temp = max(base_temp - (attempt * 0.1), 0.0)
+                        kwargs["temperature"] = new_temp
+                        
+                    response = self.llm_client.chat_completion(**kwargs)
+                    
+                    # Check for errors
+                    err_msg = response.get("error")
+                    if not err_msg:
+                        break # Success
+                        
+                    # If error is fatal/generic, we might still retry if it looks temporary
+                    # For now, we assume ALL errors might be solved by simpler/shorter requests (or just network glitch)
+                    # DeepCode explicitly handles context limits, but Ollama might just say "error".
+                    print(f"[AgentTools] Error detected: {err_msg}")
+                    
+                    if attempt == max_retries - 1:
+                        # Final Failure
+                        print(f"[AgentTools] [AGENT: {role}] LLM Fatal Error after retries: {err_msg}")
+                        if self.message_callback:
+                            self.execute_in_main_thread(
+                                self.message_callback, 
+                                "system", 
+                                f"FATAL ERROR: LLM Request Failed: {err_msg}", 
+                                name="System"
+                            )
+                        return
                 
                 # Context Metrics (Post-Execution)
                 

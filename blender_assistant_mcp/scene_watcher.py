@@ -1,5 +1,6 @@
 import bpy
 from typing import Set, Dict, List, Optional, Any, Tuple
+from .scene.scene_graph_rag import get_scene_index
 
 class SceneWatcher:
     """Tracks deeply the changes in the Blender scene to provide rich feedback."""
@@ -196,6 +197,12 @@ class SceneWatcher:
             "selected": current_selection,
             "stats": counts
         }
+
+
+
+        # Invalidate RAG index if structural changes occur
+        if any(k in changes for k in ("added", "removed", "modified", "replaced")):
+            get_scene_index().invalidate()
 
         return changes
 

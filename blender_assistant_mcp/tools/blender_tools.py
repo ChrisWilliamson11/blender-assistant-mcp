@@ -14,6 +14,7 @@ import bpy
 from . import tool_registry
 from ..memory import MemoryManager
 from ..assistant_sdk import AssistantSDK
+from ..scene.scene_graph_rag import get_scene_index, ObjectSummary
 
 _memory_manager = None
 
@@ -1591,6 +1592,46 @@ def delete_collection(collection_name: str, delete_objects: bool = False) -> dic
 
 
 
+
+def search_scene_objects(
+    query: str,
+    limit: int = 20,
+    detailed: bool = False
+) -> Union[List[Dict[str, Any]], str]:
+    """Search for objects in the scene by name, type, or keywords (e.g. "red chair").
+    
+    Args:
+        query: Search query (e.g., "camera", "red table", "Cube").
+        limit: Max results to return (default: 20).
+        detailed: If True, returns extended info (materials, modifiers). If False, compact.
+        
+    Returns:
+        List of matching objects in simplified JSON format.
+    """
+    indexer = get_scene_index()
+    results = indexer.search(query, limit=limit)
+    
+    output = []
+    for item in results:
+        data = {
+            "name": item.name,
+            "type": item.type,
+            "location": item.location
+        }
+        if detailed:
+            data["materials"] = item.materials
+            data["modifiers"] = item.modifiers
+            data["collection"] = item.collection
+            
+        output.append(data)
+        
+    if not output:
+        return f"No objects found matching '{query}'."
+        
+    # Return context-friendly string or raw list? Tool handling usually dumps JSON.
+    return output
+
+
 def register():
     """Register all Blender tools with the MCP registry."""
 
@@ -1615,6 +1656,34 @@ def register():
         },
         category="Blender",
         sdk_hint="get_scene_info(detailed=True) # Get full scene hierarchy with object details"
+    )
+
+    # search_scene_objects
+    tool_registry.register_tool(
+        "search_scene_objects",
+        search_scene_objects,
+        "Search scene for objects by keyword (RAG). Use this instead of get_scene_info when finding specific items.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Keywords to search for (e.g. 'chair', 'red light')"
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 20
+                },
+                "detailed": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Include materials/modifiers in result"
+                }
+            },
+            "required": ["query"]
+        },
+        category="Blender",
+        sdk_hint="search_scene_objects('query') # Find objects matching keywords"
     )
 
     # get_object_info
