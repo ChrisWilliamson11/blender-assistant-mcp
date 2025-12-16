@@ -72,27 +72,7 @@ def finish_task(expected_changes: List[str], summary: str = "") -> Dict[str, Any
         "expected_changes": expected_changes
     }
 
-def update_task(status: str, summary: str = "") -> Dict[str, Any]:
-    """
-    Update your current task status to stay focused and prevent drift.
-    
-    Args:
-        status: Short status (e.g. "Downloading Assets", "Refining Mesh").
-        summary: Longer description of current phase.
-    """
-    from ..session_manager import get_session
-    session = get_session(bpy.context)
-    if session:
-        # Format: "Working on: [Status] - [Summary]"
-        state_str = f"Working on: {status}"
-        if summary:
-            state_str += f" - {summary}"
-        session.current_task_state = state_str
-        
-    return {
-        "status": "UPDATED", 
-        "current_state": session.current_task_state if session else "Unknown"
-    }
+
 
 def register():
     """Register system tools."""
@@ -158,21 +138,4 @@ def register():
         requires_main_thread=False
     )
 
-    tool_registry.register_tool(
-        name="update_task",
-        func=update_task,
-        description=(
-            "Update your current task status. usage: 'Working on: [Goal] - [Phase]'.\n"
-            "Call this tool to keep yourself focused and prevent drift during long chains of thought."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "status": {"type": "string", "description": "Short status (e.g. 'Researching', 'Modeling')."},
-                "summary": {"type": "string", "description": "Longer context of what you are doing."}
-            },
-            "required": ["status"]
-        },
-        category="System",
-        requires_main_thread=False
-    )
+

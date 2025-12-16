@@ -47,6 +47,23 @@ class ResponseParser:
         # 3. Fallback: Auto-wrap Python code blocks
         return cls._parse_code_blocks(content)
 
+    @classmethod
+    def extract_thinking(cls, response: Dict[str, Any]) -> str:
+        """Extract thinking content from the response."""
+        message = response.get("message", {})
+        
+        # 1. Native field (Ollama Adapter populates this)
+        if "thinking" in message:
+            return message["thinking"]
+            
+        # 2. Reasoning field (DeepSeek/OpenAI variants) [Redundant if Adapter handles it, but good fallback]
+        if "reasoning_content" in message:
+            return message["reasoning_content"]
+        if "reasoning" in message:
+            return message["reasoning"]
+            
+        return ""
+
     @staticmethod
     def _parse_MCP_calls(response: Dict[str, Any]) -> List[ToolCall]:
         """Extract MCP tool calls from the response."""
@@ -258,10 +275,13 @@ class AssistantSession:
         - SIMPLE TASKS: If the task is very simple (a 1-liner), complete it yourself with `execute_code`.
         - COMPLEX TASKS: 
             1. CREATE PLAN: Use `task_plan(tasks=[...])` to break the request into verifiable steps. 
+                - **NEW REQUESTS**: If the user's request is a start of a new activity (unrelated to the previous plan), you MUST use `task_plan` to start fresh. This clears old completed/stale tasks.
             2. DELEGATE: Pass the user's intent to `TASK_AGENT`.
                 **CRITICAL**: When spawning `TASK_AGENT`, if you have a plan, the query MUST be: "Execute items X to Y from the Task List" or "Execute ALL pending tasks". Do NOT just repeat the user's raw query if you have already planned it.
-        - VERIFICATION: If you delegated a task, you MUST delegate verification to `COMPLETION_AGENT`.
-        - COMPLETION PROTOCOL: If `spawn_agent(COMPLETION_AGENT)` returns a verification success, your job is DONE. Immediately report the result to the user and STOP.
+        - VERIFICATION:
+            - **SIMPLE TASKS** (e.g. "Download X", "Add Cube"): You MAY trust the `TASK_AGENT`'s `expected_changes` output if it explicitly lists the added objects. If valid, report success and STOP. Do NOT spawn `COMPLETION_AGENT`.
+            - **COMPLEX TASKS**: You MUST delegate verification to `COMPLETION_AGENT`.
+        - COMPLETION PROTOCOL: If verification returns success (or you verified it via simple task check), your job is DONE. Immediately report the result to the user and STOP.
         When using python for simple tasks, "Inline Code Execution" is available for efficiency. Feel free to write Python blocks (` ```python ... ``` `) directly in your response to run quick checks or simple actions without formal tool calls.
         Multiple code blocks will be processed one after the other, and the execution environment maintains a persistant state, so you could define a function in one code block then run it later from another for a real free-form thinking/coding experience.
         

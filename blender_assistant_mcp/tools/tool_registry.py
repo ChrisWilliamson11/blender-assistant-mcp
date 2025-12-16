@@ -10,6 +10,7 @@ import ast
 # Global tool registry
 import json
 from typing import Any, Callable, Dict, List
+from .. import usage_stats
 
 
 def _parse_str_to_obj(s):
@@ -318,12 +319,13 @@ def get_tool_info(name: str) -> Dict[str, Any]:
     return _TOOLS.get(name, {})
 
 
-def execute_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+def execute_tool(name: str, args: Dict[str, Any], source: str = "MCP") -> Dict[str, Any]:
     """Execute a registered tool.
 
     Args:
         name: Tool name
         args: Tool arguments
+        source: Origin of the call ("MCP" or "SDK"). Defaults to "MCP".
 
     Returns:
         Tool result as dict
@@ -331,6 +333,12 @@ def execute_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name not in _TOOLS:
         available = ", ".join(_TOOLS.keys())
         return {"error": f"Unknown tool: {name}. Available: {available}"}
+
+    # Track Usage
+    try:
+        usage_stats.track_usage(name, source)
+    except Exception as e:
+        print(f"[ToolRegistry] Warning: Failed to track usage for {name}: {e}")
 
     # Normalize args
     if args is None:

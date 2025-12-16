@@ -500,6 +500,77 @@ class ASSISTANT_OT_send(bpy.types.Operator):
         return {"PASS_THROUGH"}
 
     def _finish(self, context):
+        # Final UI Sync to ensure last message is shown
+        try:
+            session = get_session(context)
+            wm = context.window_manager
+            if session and wm.assistant_chat_sessions and 0 <= wm.assistant_active_chat_index < len(wm.assistant_chat_sessions):
+                session_ui = wm.assistant_chat_sessions[wm.assistant_active_chat_index]
+                
+                # Sync Python session history to Blender UI Collection
+                hist_len = len(session.full_history)
+                ui_len = len(session_ui.messages)
+                
+                # Append new messages
+                if hist_len > ui_len:
+                    for i in range(ui_len, hist_len):
+                        msg_data = session.full_history[i]
+                        new_msg = session_ui.messages.add()
+                        raw_role = msg_data.get("role", "System")
+                        
+                        # Normalize for UI (User Request: "User")
+                        if raw_role == "user" or raw_role == "You":
+                            new_msg.role = "User"
+                        elif raw_role == "assistant":
+                            new_msg.role = "Assistant"
+                        elif raw_role == "tool":
+                            new_msg.role = "Tool"
+                        elif raw_role == "thinking":
+                            new_msg.role = "Thinking"
+                        else:
+                            new_msg.role = raw_role.replace("_", " ").title()
+                            
+                        new_msg.tool_name = msg_data.get("name", "")
+                        
+                        # Content Logic
+                        content = msg_data.get("content", "")
+                        tool_calls = msg_data.get("tool_calls", [])
+                        
+                        if not content and tool_calls:
+                            import json
+                            try:
+                                display_calls = []
+                                for tc in tool_calls:
+                                    if hasattr(tc, "tool") and hasattr(tc, "args"):
+                                        display_calls.append({"tool": tc.tool, "args": tc.args})
+                                    elif isinstance(tc, dict):
+                                        display_calls.append(tc)
+                                    else:
+                                        display_calls.append(str(tc))
+                                
+                                dump = json.dumps(display_calls, indent=2)
+                                content = f"```json\n{dump}\n```"
+                            except:
+                                content = "🛠️ [Calling Tools...]"
+                                
+                        new_msg.content = content
+                        
+                        if "usage" in msg_data:
+                            import json
+                            new_msg.usage = json.dumps(msg_data["usage"])
+                        
+                    # Scroll to bottom
+                    if new_msg.role in {"User", "Assistant", "Task Agent", "Completion Agent", "Scene Agent", "Error"}:
+                        wm.assistant_chat_message_index = len(session_ui.messages) - 1
+        except Exception as e:
+            print(f"Final UI Sync failed: {e}")
+
+        # Force redraw
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+
         ASSISTANT_OT_send._is_running = False
         if self._timer:
             context.window_manager.event_timer_remove(self._timer)
@@ -526,7 +597,7 @@ class ASSISTANT_OT_view_request_payload(bpy.types.Operator):
         except:
              prefs = None
 
-        enabled_tools = session.tool_manager.get_enabled_tools_for_role("MANAGER", preferences=prefs)
+        enabled_tools = session.tool_manager.get_enabled_tools_for_role("ASSISTANT", preferences=prefs)
         system_prompt = session.get_system_prompt(enabled_tools)
         tools = session.tool_manager.get_openai_tools(enabled_tools)
         

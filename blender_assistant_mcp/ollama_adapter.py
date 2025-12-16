@@ -227,60 +227,72 @@ def chat_completion(
                     
                 return {"message": final_message, "usage": metrics}
 
-        try:
-            result = _do_request(payload)
-        except urllib.error.HTTPError as he:
-            # Some models (e.g., Gemma) don't support MCP tools. Retry once without tools on 400.
-            # Also, some models don't support 'think' and will 400; retry once without 'think'.
-            body = None
+        # Retry handling for 500/parsing errors
+        max_retries = 2
+        for attempt in range(max_retries + 1):
             try:
-                body = he.read().decode("utf-8", errors="ignore")
-            except Exception:
+                result = _do_request(payload)
+                break # Success
+            except urllib.error.HTTPError as he:
+                # 500 Internal Server Error (often due to model output formatting/JSON issues)
+                if he.code == 500 and attempt < max_retries:
+                    print(f"[Ollama Adapter] HTTP 500 (Attempt {attempt+1}/{max_retries+1}); Retrying...")
+                    continue
+
+                # Some models (e.g., Gemma) don't support MCP tools. Retry once without tools on 400.
+                # Also, some models don't support 'think' and will 400; retry once without 'think'.
                 body = None
-            if he.code == 400 and tools:
-                print("[Ollama Adapter] HTTP 400 with tools; retrying without tools...")
-                payload_no_tools = dict(payload)
-                payload_no_tools.pop("tools", None)
                 try:
-                    result = _do_request(payload_no_tools)
-                except urllib.error.HTTPError as he2:
-                    # If still 400 and likely due to 'think', retry without 'think'
-                    body2 = None
+                    body = he.read().decode("utf-8", errors="ignore")
+                except Exception:
+                    body = None
+                if he.code == 400 and tools:
+                    print("[Ollama Adapter] HTTP 400 with tools; retrying without tools...")
+                    payload_no_tools = dict(payload)
+                    payload_no_tools.pop("tools", None)
                     try:
-                        body2 = he2.read().decode("utf-8", errors="ignore")
-                    except Exception:
+                        result = _do_request(payload_no_tools)
+                        break
+                    except urllib.error.HTTPError as he2:
+                        # If still 400 and likely due to 'think', retry without 'think'
                         body2 = None
-                    if he2.code == 400 and (
-                        ("think" in payload_no_tools)
-                        or (
-                            body2
-                            and (
-                                "think" in body2.lower() or "thinking" in body2.lower()
+                        try:
+                            body2 = he2.read().decode("utf-8", errors="ignore")
+                        except Exception:
+                            body2 = None
+                        if he2.code == 400 and (
+                            ("think" in payload_no_tools)
+                            or (
+                                body2
+                                and (
+                                    "think" in body2.lower() or "thinking" in body2.lower()
+                                )
                             )
-                        )
-                    ):
-                        print(
-                            "[Ollama Adapter] HTTP 400 with think; retrying without think..."
-                        )
-                        payload_no_think = dict(payload_no_tools)
-                        payload_no_think.pop("think", None)
-                        result = _do_request(payload_no_think)
-                    else:
-                        return {
-                            "error": f"Ollama request failed: HTTP Error {he2.code}: {body2 or he2.reason}"
-                        }
-            elif he.code == 400 and (
-                ("think" in payload)
-                or (body and ("think" in body.lower() or "thinking" in body.lower()))
-            ):
-                print("[Ollama Adapter] HTTP 400 with think; retrying without think...")
-                payload_no_think = dict(payload)
-                payload_no_think.pop("think", None)
-                result = _do_request(payload_no_think)
-            else:
-                return {
-                    "error": f"Ollama request failed: HTTP Error {he.code}: {body or he.reason}"
-                }
+                        ):
+                            print(
+                                "[Ollama Adapter] HTTP 400 with think; retrying without think..."
+                            )
+                            payload_no_think = dict(payload_no_tools)
+                            payload_no_think.pop("think", None)
+                            result = _do_request(payload_no_think)
+                            break
+                        else:
+                            return {
+                                "error": f"Ollama request failed: HTTP Error {he2.code}: {body2 or he2.reason}"
+                            }
+                elif he.code == 400 and (
+                    ("think" in payload)
+                    or (body and ("think" in body.lower() or "thinking" in body.lower()))
+                ):
+                    print("[Ollama Adapter] HTTP 400 with think; retrying without think...")
+                    payload_no_think = dict(payload)
+                    payload_no_think.pop("think", None)
+                    result = _do_request(payload_no_think)
+                    break
+                else:
+                    return {
+                        "error": f"Ollama request failed: HTTP Error {he.code}: {body or he.reason}"
+                    }
 
         # Extract content from Ollama response and return message too for MCP tool-calls
         if "message" in result:

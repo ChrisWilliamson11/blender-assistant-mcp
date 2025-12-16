@@ -116,6 +116,7 @@ class AgentTools:
                 RULES:
                 - CONTEXT SAFETY: **CRITICAL**: Do NOT use `get_object_info(verbose=True)` for multiple objects or validation. It dumps massive data and crashes the session. Use `inspect_data` for specific properties if needed.
                 - EVIDENCE REQUIREMENT: Base all decision on concrete tool outputs (e.g. `get_object_info` default mode).
+                - CHECK HISTORY: Before searching blindly, READ the 'scene_changes' or 'expected_changes' from the Task Agent's output in the chat history. If the object is listed there, verify it specifically.
                 - TASK LIST PROTOCOL: Use `task_list` to see the "Plan of Record". Verify EACH item marked DONE.
                 - INCOMPLETION PROTOCOL: If verification fails or data is missing, report as INCOMPLETE with details."""
             ),
@@ -193,8 +194,28 @@ class AgentTools:
                 # 1. SDK Support (What tools can I call via execute_code?)
                 # Retrieve universe for this role, then filter out what is enabled as MCP
                 allowed_tools = self.tool_manager.get_allowed_tools_for_role(role)
-                enabled_mcp = {t["function"]["name"] for t in tools} if tools else set()
+                # Default to all tools enabled in the request that are allowed for this role
+                enabled_mcp = {t["function"]["name"] for t in tools if t["function"]["name"] in allowed_tools} if tools else set()
                 
+                # Filter out low-level Polyhaven tools for everyone to enforce smart wrappers
+                polyhaven_hiding = {"search_polyhaven_assets", "get_polyhaven_asset_info"}
+                enabled_mcp = enabled_mcp - polyhaven_hiding
+
+                # For sub-agents (non-ASSISTANT), remove task management tools so they only use 'task_list' and 'finish_task'
+                if role != "ASSISTANT":
+                    task_tools_to_hide = {"task_add", "task_update", "task_complete", "task_clear", "task_plan"}
+                    enabled_mcp = enabled_mcp - task_tools_to_hide
+                
+                # Add Task Completion Protocol for TASK_AGENT role
+                if role == "TASK_AGENT":
+                    task_completion_section = """
+                    TASK COMPLETION PROTOCOL:
+                    - After completing all required actions, CALL `finish_task` with a list of expected changes and a brief summary.
+                    - This will signal the calling agent that the work is done and return the normal response structure.
+                    - Do NOT manually mark individual tasks as DONE; rely on `finish_task`.
+                    """
+                else:
+                    task_completion_section = ""
                 # Generate the SDK list (Tools allowed but NOT enabled as MCP)
                 sdk_section = self.tool_manager.get_system_prompt_hints(enabled_mcp, allowed_tools)
                 
@@ -212,7 +233,24 @@ class AgentTools:
                 mcp_list_str = json.dumps(sorted(list(enabled_mcp)), indent=2)
                 mcp_section = f"MCP TOOLS (Primary Interactions):\n{mcp_list_str}"
 
-                full_system_prompt = f"{base_prompt}\n\n{mcp_section}\n\n{sdk_section}\n\n{behavior_section}\n\n{protocol_section}"
+                # 5. Concurrent Edit Protocol
+                concurrent_section = """
+NOTE ON SCENE SYNCHRONIZATION:
+You are collaborating with a human USER who is also editing the scene live. 
+'Scene Changes' logs may reflect USER actions (active deletions, moves, etc.).
+**PROTOCOL**:
+1. Treat the current scene state as the TRUTH.
+2. Do NOT try to 'restore' objects that were deleted unless explicitly asked.
+3. If a required object is missing, report it as a blocker rather than silently recreating it."""
+
+                # Add Task Completion Protocol instruction
+                
+                # Build the full system prompt, including task_completion_section only if non-empty
+                full_system_prompt = f"{base_prompt}\n\n{mcp_section}\n\n{sdk_section}\n\n{behavior_section}\n\n{concurrent_section}\n\n{protocol_section}"
+                if task_completion_section:
+                    full_system_prompt += f"\n\n{task_completion_section}"
+
+                
                 
                 # Inject into messages if it's the first turn or if we want to reinforce it
                 # Ideally, we replace the first 'system' message if it exists, or prepend it
@@ -226,7 +264,6 @@ class AgentTools:
                 # LLM Request
                 # Prepare kwargs from settings
                 kwargs = {
-                     "format": "json",
                      "stream": True,
                      "tools": tools,
                      "model_path": model_to_use,
@@ -268,96 +305,60 @@ class AgentTools:
                     return
                 
                 # Context Metrics (Post-Execution)
+                
+                # Usage extraction (Defer logging until after thinking display)
                 usage = response.get("usage", {})
-                if usage:
-                    prompt_tokens = usage.get("prompt_eval_count", 0)
-                    completion_tokens = usage.get("eval_count", 0)
-                    total_dur = usage.get("total_duration", 0) / 1e9 # ns to s
-                    
-                    print(f"[AgentTools] [AGENT: {role}] Usage: {prompt_tokens} input tokens, {completion_tokens} output tokens ({total_dur:.2f}s)")
-                    
-                    if self.message_callback:
-                         self.execute_in_main_thread(
-                            self.message_callback, 
-                            "system", 
-                            f"Context: {prompt_tokens} tokens | Output: {completion_tokens} tokens | Time: {total_dur:.2f}s", 
-                            name=role
-                        )
+
                 
                 
-                new_data = {}
-                content = response.get("content", "{}")
-                tool_calls = response.get("tool_calls", []) or response.get("message", {}).get("tool_calls", [])
+                # --- CONSOLIDATED PARSING LOGIC ---
+                from .core import ResponseParser
                 
-                # Check for Native Thinking (Ollama/DeepSeek)
-                native_thinking = response.get("message", {}).get("thinking", "")
+                # Use core ResponseParser for robust handling
+                parsed_tools = ResponseParser.parse(response)
                 
-                # If we have thinking but no content/tools, syntesize content
-                if native_thinking and not tool_calls:
-                     # Attempt to preserve existing content if it's JSON
+                # Extract content/thinking
+                raw_content = response.get("content", "") or ""
+                native_thinking = ResponseParser.extract_thinking(response)
+                
+                # Check for legacy JSON in content (if no tool calls)
+                legacy_data = {}
+                if isinstance(raw_content, str) and (raw_content.strip().startswith("{") or raw_content.strip().startswith("```json")):
                      try:
-                         _d = json.loads(content) if content else {}
-                     except:
-                         _d = {"thought": str(content)} if content else {}
-                     
-                     # Merge thinking
-                     exist_th = _d.get("thought", "")
-                     if exist_th:
-                         _d["thought"] = f"{native_thinking}\n\n{exist_th}"
-                     else:
-                         _d["thought"] = native_thinking
-                     
-                     content = json.dumps(_d)
+                         # Use ResponseParser internal helper if we could, but simple load is fine for legacy
+                         # Strip markdown if needed
+                         json_str = raw_content.strip()
+                         if json_str.startswith("```json"): 
+                             json_str = json_str[7:].split("```")[0]
+                         legacy_data = json.loads(json_str)
+                     except: pass
+                
+                # Construct Normalized Data
+                thought = native_thinking or legacy_data.get("thought", "")
+                
+                # Fallback: If no structured thought, but we have text content that ISN'T just a JSON block, treat as thought
+                # This fixes visibility for models like GPT-OSS that output text before tool calls without tags
+                if not thought and raw_content:
+                    stripped = raw_content.strip()
+                    # If it doesn't look like a pure JSON/Code block starter, treat as thought
+                    if not (stripped.startswith("```json") or stripped.startswith("{") or stripped.startswith("```python")):
+                         thought = raw_content
 
-                # MCP Tool Logic (Native & Content Merging)
-                if tool_calls:
-                     try:
-                         # 1. Extract valid thought from existing content if possible
-                         existing_thought = ""
-                         if content and content != "{}":
-                             try:
-                                 _tmp = json.loads(content)
-                                 existing_thought = _tmp.get("thought", "")
-                             except:
-                                 # If content is just text, use it as thought
-                                 existing_thought = str(content)
-
-                         # 2. Capture Native Thinking (Ollama/DeepSeek)
-                         native_thinking = response.get("message", {}).get("thinking", "")
-                         if native_thinking:
-                             # Prefer native thinking or append it
-                             if existing_thought:
-                                 existing_thought = f"{native_thinking}\n\n{existing_thought}"
-                             else:
-                                 existing_thought = native_thinking
-
-                         # 2. Process Native Tool Calls (Multi-Tool Support)
-                         new_data["tool_calls"] = []
-                         
-                         for call in tool_calls:
-                             fn_name = call.get("function", {}).get("name")
-                             fn_args = call.get("function", {}).get("arguments")
-                             
-                             if isinstance(fn_args, str):
-                                 try:
-                                    fn_args = json.loads(fn_args)
-                                 except:
-                                    pass # Keep as string or error?
-                             
-                             # Special Handling for finish_task updates
-                             if fn_name == "finish_task":
-                                 new_data["expected_changes"] = fn_args.get("expected_changes", [])
-                                 if "summary" in fn_args:
-                                     summary_text = fn_args['summary']
-                                     new_data["finish_summary"] = summary_text
-                                     new_data["thought"] += f" [Completing Task: {summary_text}]"
-                                 # We still append it to execute it properly (for state update)
-                             
-                             new_data["tool_calls"].append({"name": fn_name, "args": fn_args})
-                             
-                         content = json.dumps(new_data)
-                     except Exception as e:
-                         print(f"[AgentTools] [AGENT: {role}] Failed to parse MCP tool call: {e}")
+                data = {
+                    "thought": thought,
+                    "code": legacy_data.get("code", ""),
+                    "tool_calls": [{"name": t.tool, "args": t.args} for t in parsed_tools],
+                    "expected_changes": legacy_data.get("expected_changes", []),
+                    "finish_summary": legacy_data.get("finish_summary", ""),
+                    "reply": legacy_data.get("content", "") # Persist main content/reply
+                }
+                
+                # Re-serialize for consistent downstream processing variables and history
+                # This ensures 'content' used in history includes our extracted thought
+                content = json.dumps(data)
+                usage = response.get("usage")
+                
+                # --- (Loop logic falls through to check valid data) ---
 
                 # Processing Content
                 # Processing Content
@@ -370,34 +371,49 @@ class AgentTools:
                     try:
                         data = json.loads(content)
                     except json.JSONDecodeError:
-                        print(f"[AgentTools] [AGENT: {role}] JSON Parse Error. Content: {content[:100]}...")
-                        empty_turns += 1
-                        
-                        if empty_turns >= 5:
-                             if self.message_callback:
-                                 self.execute_in_main_thread(self.message_callback, role, "Agent stuck in invalid format loop. Aborting.", name=role)
-                             return
-                        
-                        if self.message_callback:
-                             # Show the RAW content so user can debug "Invalid Format"
-                             raw_preview = content
-                             if len(raw_preview) > 500: raw_preview = raw_preview[:500] + "... [Truncated]"
-                             error_msg = f"Agent returned invalid format. Raw Output:\n```json\n{raw_preview}\n```"
-                             self.execute_in_main_thread(self.message_callback, "system", error_msg, name=role)
-                             
-                             # Retry logic remains
-                             self.execute_in_main_thread(self.message_callback, role, "Agent returned invalid format. Retrying...", name=role)
-                        messages.append({"role": "user", "content": "Error: Invalid JSON response. Please return valid JSON."})
-                        continue
+                        # Fallback: Content is not JSON, but possibly a final Plain Text response.
+                        if content and not content.strip().startswith("{"):
+                             # Treat as valid text response (Reply)
+                             # We use 'reply' field to distinguish from internal thought
+                             data = {"reply": content} 
+                        else:
+                            # Genuine JSON error (e.g. broken JSON)
+                            print(f"[AgentTools] [AGENT: {role}] JSON Parse Error. Content: {content[:100]}...")
+                            empty_turns += 1
+                            
+                            if empty_turns >= 5:
+                                 if self.message_callback:
+                                     self.execute_in_main_thread(self.message_callback, role, "Agent stuck in invalid format loop. Aborting.", name=role)
+                                 return
+                            
+                            if self.message_callback:
+                                 # Show the RAW content so user can debug "Invalid Format"
+                                 # Truncate for sanity
+                                 raw_preview = content
+                                 if len(raw_preview) > 500: raw_preview = raw_preview[:500] + "... [Truncated]"
+                                 error_msg = f"Agent returned invalid format. Raw Output:\n```json\n{raw_preview}\n```"
+                                 self.execute_in_main_thread(self.message_callback, "system", error_msg, name=role)
+                                 
+                                 # Retry logic remains
+                                 self.execute_in_main_thread(self.message_callback, role, "Agent returned invalid format. Retrying...", name=role)
+                            messages.append({"role": "user", "content": "Error: Invalid JSON response. Please return valid JSON."})
+                            continue
                     
                 thought = data.get("thought", "")
+                # New: capture plain assistant message as reply if present
+                reply = data.get("reply", "")
                 code = data.get("code", "")
                 tool_call = data.get("tool_call")
+                tool_calls = data.get("tool_calls", [])
                 expected_changes = data.get("expected_changes")
                 finish_summary = data.get("finish_summary")
+
+                # DISPLAY REPLY (If accepted as final text response)
+                if reply and self.message_callback:
+                     self.execute_in_main_thread(self.message_callback, role, reply, name=role)
                 
                 # SILENT LOOP PROTECTION
-                if not thought and not code and not tool_call and not expected_changes:
+                if not thought and not reply and not code and not tool_call and not tool_calls and not expected_changes:
                      empty_turns += 1
                      print(f"[AgentTools] [AGENT: {role}] Empty turn detected ({empty_turns}/5). Retrying...")
                      
@@ -406,7 +422,7 @@ class AgentTools:
                          if self.message_callback:
                              self.execute_in_main_thread(self.message_callback, role, "Agent stuck in silence. Aborting.", name=role)
                          return
-
+ 
                      if self.message_callback:
                          self.execute_in_main_thread(self.message_callback, role, f"Empty Response (Retrying {empty_turns}/5)...", name=role)
                      messages.append({"role": "user", "content": "Error: You returned empty JSON. Please return 'thought' AND ('code' OR 'tool_call' OR 'expected_changes')."})
@@ -416,20 +432,20 @@ class AgentTools:
                 empty_turns = 0
 
                 # THINKING STALL PROTECTION
-                # If agent returns ONLY thought (no code/tool/finish) for multiple turns
-                if thought and not code and not tool_call and not expected_changes:
+                # If agent returns ONLY thought (no code/tool/finish/reply) for multiple turns
+                if thought and not reply and not code and not tool_call and not tool_calls and not expected_changes:
                      # Check if we are stalling
                      if not "thought_only_turns" in locals(): thought_only_turns = 0
                      thought_only_turns += 1
                      
-                     if thought_only_turns > 3:
+                     if thought_only_turns > 8:
                          print(f"[AgentTools] [AGENT: {role}] ABORTING: Agent stuck in thinking loop.")
                          if self.message_callback:
                              self.execute_in_main_thread(self.message_callback, role, "Agent stuck in thinking loop. Aborting.", name=role)
                          return {"status": "ERROR", "error": "Agent stuck in thinking loop."}
                          
                      # Prompt for action
-                     print(f"[AgentTools] [AGENT: {role}] Thought only turn ({thought_only_turns}/3). Prompting for action...")
+                     print(f"[AgentTools] [AGENT: {role}] Thought only turn ({thought_only_turns}/8). Prompting for action...")
                      messages.append({"role": "assistant", "content": content})
                      messages.append({"role": "user", "content": "System: You provided 'thought' but no action. Please Execute Code, Call a Tool, or Return expected_changes."})
                      continue
@@ -440,9 +456,11 @@ class AgentTools:
                 
                 if self.message_callback and thought:
                     # Pass usage statistics if available (so UI can store it)
-                    # We need to access 'usage' which was captured earlier (Line 213)
-                    self.execute_in_main_thread(self.message_callback, "thinking", thought, name=role, usage=usage if "usage" in locals() else None)
+                    # We pass 'thinking' as role so UI renders it as thinking bubble
+                    self.execute_in_main_thread(self.message_callback, "thinking", thought, name=role, usage=usage)
                 
+
+
                 # Execution Priority: Code > Tool Call > Expected Changes
                 # Execution Priority: Tool Calls (List) > Legacy Code/ToolCall
                 # Normalize everything into a list of executions
@@ -478,7 +496,8 @@ class AgentTools:
                              elif t_name == "finish_task":
                                  status_msg = f"Finishing Task: {t_args.get('summary', '')}"
                              
-                             self.execute_in_main_thread(self.message_callback, "system", status_msg, name=role)
+                             # Send as Agent message so it is visible (not hidden by system filter)
+                             self.execute_in_main_thread(self.message_callback, role, status_msg, name=role)
 
                         # Execution
                         t_info = tool_registry.get_tool_info(t_name)

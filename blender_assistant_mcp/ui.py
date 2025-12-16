@@ -371,7 +371,10 @@ class ASSISTANT_PT_panel(bpy.types.Panel):
             icon_only=True,
             emboss=False,
         )
-        row.label(text="Model Configuration", icon="PREFERENCES")
+        if not prefs.show_ollama_config and prefs.model_file:
+            row.label(text=f"Model Configuration: {prefs.model_file}", icon="PREFERENCES")
+        else:
+            row.label(text="Model Configuration", icon="PREFERENCES")
 
         if prefs.show_ollama_config:
             # Model selection
@@ -868,6 +871,8 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
 
         # Role-based row colors for better readability
         # User (lightest), Assistant (medium), Tool (darkest)
+        display_role = item.role # Default fallback
+        
         row = layout.row(align=True)
         if item.role == "You" or item.role == "User":
             # User messages - lightest (almost white)
@@ -900,8 +905,7 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
             row.emboss = "NONE_OR_STATUS"
             display_role = item.role
 
-        if item.role != "Thinking" and item.role != "thinking":
-             display_role = item.role
+
 
         split = row.split(factor=0.25) # Slightly wider for "Assistant (Thinking)"
         split.label(text=display_role)
@@ -911,6 +915,23 @@ class ASSISTANT_UL_chat(bpy.types.UIList):
         if item.image_data:
             content_row.label(text="", icon="IMAGE_DATA")
         content_row.label(text=item.content)
+
+        # Usage Footer (Small, subtle)
+        if item.usage:
+             import json
+             try:
+                 u = json.loads(item.usage)
+                 ctx = u.get("prompt_eval_count", 0)
+                 out = u.get("eval_count", 0)
+                 dur = u.get("total_duration", 0) / 1e9
+                 
+                 
+                 footer_text = f"[{ctx} tok | {out} tok | {dur:.2f}s]"
+                 r = content_row.row()
+                 r.alignment = 'RIGHT'
+                 r.label(text=footer_text, icon="INFO")
+             except:
+                 pass
 
 
 class ASSISTANT_OT_new_chat(bpy.types.Operator):

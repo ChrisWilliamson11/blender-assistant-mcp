@@ -112,8 +112,8 @@ class ToolManager:
         if not tools_by_namespace:
             return ""
 
-        lines = ["SDK CAPABILITIES (Tools available via `execute_code`):"]
-        lines.append("To use these, first call `sdk_help(tool_names=['...'])` to get the signature, then run `assistant_sdk.tool(...)` via `execute_code`.")
+        lines = ["SDK TOOLS (Available via `assistant_sdk`):"]
+        lines.append("Use `sdk_help(tool_names=['...'])` to get the signature, then run `assistant_sdk.tool(...)` via `execute_code`.")
         lines.append("")
         for namespace, tools in sorted(tools_by_namespace.items()):
             # Format: - namespace: tool1(arg), tool2(arg), ...
@@ -138,7 +138,10 @@ class ToolManager:
                 "task_plan", "task_list", "task_clear", "spawn_agent",
                 # Inspection / Vision
                 "get_object_info", "get_scene_info", "search_data",
-                "capture_viewport_for_vision"
+                "capture_viewport_for_vision",
+                # Web
+                "web_search", "fetch_webpage", "search_image_url", "search_wikimedia_image", 
+                "extract_image_urls_from_webpage", "download_image_as_texture"
             })
         
         elif role == "TASK_AGENT":
@@ -149,7 +152,8 @@ class ToolManager:
                 "get_object_info", "get_scene_info", "search_data",
                 "get_active", "get_selection", "select_by_type", "set_active", "set_selection",
                 # Polyhaven
-                "download_polyhaven", "search_polyhaven_assets", "get_polyhaven_asset_info",
+                "download_polyhaven_model", "download_polyhaven_texture", "download_polyhaven_hdri",
+                "search_polyhaven_assets", "get_polyhaven_asset_info",
                 # Web
                 "web_search", "fetch_webpage", "search_image_url", "search_wikimedia_image", 
                 "extract_image_urls_from_webpage", "download_image_as_texture", 

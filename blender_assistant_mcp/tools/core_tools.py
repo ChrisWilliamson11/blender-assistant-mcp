@@ -25,10 +25,28 @@ def execute_code(code: str):
     import sys
     sys.modules["assistant_sdk"] = assistant_sdk
 
+    # Inject Core Primitives (Global)
+    from . import system_tools
+    from . import task_tools
+
     namespace = {
         "bpy": bpy,
         "print": print,
-        "assistant_sdk": assistant_sdk.get_assistant_sdk()
+        "assistant_sdk": assistant_sdk.get_assistant_sdk(),
+        
+        # System Primitives (Built-ins)
+        "spawn_agent": system_tools.spawn_agent,
+        "finish_task": system_tools.finish_task,
+        "sdk_help": sdk_help,
+        
+        # Task Flow Primitives
+        "task_add": task_tools.task_add,
+        "task_update": task_tools.task_update,
+        "task_list": task_tools.task_list,
+        "task_complete": task_tools.task_complete,
+        
+        # Utilities
+        "json": json
     }
 
     # Capture stdout/stderr

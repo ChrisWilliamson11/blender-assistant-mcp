@@ -505,11 +505,19 @@ class ASSISTANT_OT_refresh_models(bpy.types.Operator):
                 self.report(
                     {"INFO"}, f"Found {len(_ollama_models_enum_items)} chat models"
                 )
+                
+                # Sanitize active model selection to prevent RNA warnings
+                valid_ids = {item[0] for item in _ollama_models_enum_items}
+                if prefs.model_file not in valid_ids and _ollama_models_enum_items:
+                    print(f"[Assistant] 'model_file' had invalid value '{prefs.model_file}', resetting to '{_ollama_models_enum_items[0][0]}'")
+                    prefs.model_file = _ollama_models_enum_items[0][0]
+
             else:
                 _ollama_models_cache = []
                 _ollama_models_enum_items = [
                     ("NONE", "No models found", "Use 'ollama pull' to download models")
                 ]
+                prefs.model_file = "NONE"
                 self.report(
                     {"WARNING"},
                     "No Ollama models found. Use 'ollama pull <model>' to download.",
@@ -1130,9 +1138,13 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             ("OFF", "Off", "Disable thinking (GPT-OSS maps to Low)"),
             ("LOW", "Low", "Short reasoning"),
             ("MEDIUM", "Medium", "More reasoning"),
-            ("HIGH", "High", "Detailed reasoning"),
-        ],
         default="LOW",
+    )
+
+    enforce_json: bpy.props.BoolProperty(
+        name="Enforce JSON Output",
+        description="Force the Agent to output strictly JSON. Uncheck to allow Thinking/Text (experimental)",
+        default=False
     )
 
     keep_alive: bpy.props.EnumProperty(
@@ -2426,11 +2438,16 @@ def register():
                         # Add new tool
                         item = prefs.tool_config_items.add()
                         item.name = name
-                        item.category = tool_data.get("category", "Other")
+                        cat = tool_data.get("category", "Other")
+                        item.category = cat
                         item.description = tool_data.get("description", "")
-                        # Enable by default if in schema_tools OR if it's a core tool (fallback logic)
-                        item.enabled = name in default_enabled
-                        print(f"[Tool Config] Added new tool: {name}")
+                        
+                        # Enable by default if in schema_tools OR if it's a Web tool (User Request)
+                        # Fix: Property is 'expose_mcp', not 'enabled'
+                        is_web = (cat == "Web")
+                        item.expose_mcp = (name in default_enabled) or is_web
+                        
+                        print(f"[Tool Config] Added new tool: {name} (Enabled: {item.expose_mcp})")
                     else:
                         # Update description/category of existing tool
                         for item in prefs.tool_config_items:

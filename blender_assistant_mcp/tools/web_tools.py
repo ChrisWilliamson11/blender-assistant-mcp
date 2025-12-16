@@ -1059,6 +1059,35 @@ def search_image_url(query: str, num_results: int = 5) -> dict:
     )
 
     tool_registry.register_tool(
+        "web_search",
+        web_search,
+        (
+            "Search the web using DuckDuckGo (HTML scraping).\n"
+            "USAGE: General knowledge, news, documentation, finding textures/models.\n"
+            "RETURNS: List of results with titles, URLs, and snippets."
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query",
+                },
+                "num_results": {
+                    "type": "integer",
+                    "description": "Number of results to return (default: 5)",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 10,
+                },
+            },
+            "required": ["query"],
+        },
+        category="Web",
+        requires_main_thread=False
+    )
+
+    tool_registry.register_tool(
         "fetch_webpage",
         fetch_webpage,
         (

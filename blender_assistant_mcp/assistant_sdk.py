@@ -46,7 +46,7 @@ class _Namespace:
                         raise TypeError(f"{tool_name}() got multiple values for argument '{param_name}'")
                     kwargs[param_name] = arg
             
-            result = tool_registry.execute_tool(tool_name, kwargs)
+            result = tool_registry.execute_tool(tool_name, kwargs, source="SDK")
             
             # CRITICAL FIX: If tool returned an error, RAISE it so execute_code catches it.
             # Otherwise, the agent thinks it succeeded because it got a dict back.

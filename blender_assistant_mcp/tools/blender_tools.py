@@ -583,6 +583,21 @@ def _get_object_summary(obj) -> dict:
     return summary
 
 
+def _get_code_namespace():
+    """Get the namespace for evaluating simplified paths."""
+    import bpy
+    import math
+    import mathutils
+    return {
+        "bpy": bpy,
+        "math": math,
+        "Vector": mathutils.Vector,
+        "Euler": mathutils.Euler,
+        "Matrix": mathutils.Matrix,
+        "Color": mathutils.Color,
+        "Quaternion": mathutils.Quaternion,
+    }
+
 def inspect_data(path: str, depth: int = 1, filter_props: list = None) -> dict:
     """Introspect a Blender data block and return its structure (AST-like).
     

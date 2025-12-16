@@ -28,6 +28,12 @@ class SceneWatcher:
         for m in obj.modifiers:
             mods.append((m.name, m.type, m.show_viewport))
             
+        # Constraints: list of (name, type, target_name)
+        constrs = []
+        for c in obj.constraints:
+            target = c.target.name if getattr(c, 'target', None) else None
+            constrs.append((c.name, c.type, target))
+
         # Materials: list of material names (or None)
         mats = []
         for slot in obj.material_slots:
@@ -43,6 +49,7 @@ class SceneWatcher:
             "location": tuple(round(x, 4) for x in obj.location),
             "dimensions": tuple(round(x, 4) for x in obj.dimensions),
             "modifiers": tuple(mods),
+            "constraints": tuple(constrs),
             "materials": tuple(mats),
             "parent": obj.parent.name if obj.parent else None,
             "collection": obj.users_collection[0].name if obj.users_collection else None
@@ -78,13 +85,18 @@ class SceneWatcher:
         # Current State
         current_state = {}
         current_objects = {}
+        counts = {} # Stats
+        
         for obj in bpy.data.objects:
             sig = self._get_obj_signature(obj)
             current_state[obj.name] = sig
             current_objects[obj.name] = obj
+            # Stats
+            t = obj.type
+            counts[t] = counts.get(t, 0) + 1
             
         current_materials = {mat.name for mat in bpy.data.materials}
-        current_selection = {obj.name for obj in bpy.context.selected_objects}
+        current_selection = [obj.name for obj in bpy.context.selected_objects] # List is better for JSON
         active = bpy.context.active_object
         current_active = active.name if active else None
         current_mode = bpy.context.mode
@@ -111,12 +123,6 @@ class SceneWatcher:
             changes["removed"] = list(removed)
 
         # B. Object Modifications (Deep Diff)
-        # Check intersection of existing objects AND (dirty set or ALL if no dirty set used yet?)
-        # To be safe, if dirty set is used, we only check it.
-        # But newly added objects are handled above separately?
-        # WAIT: Newly added objects are in 'added', so we don't need to deep diff them as 'modified'.
-        # We only need to check objects that existed before AND exist now.
-        
         candidates = last_names & curr_names
         if self.dirty_object_names:
             candidates = candidates & self.dirty_object_names
@@ -129,38 +135,31 @@ class SceneWatcher:
             new_sig = current_state[name]
             
             # 0. Identity Check (Replacement)
-            # If name matches but pointer differs, object was deleted and recreated
             if old_sig.get("pointer") != new_sig.get("pointer"):
                 replaced.append({
                     "name": name,
                     "new_type": new_sig["type"]
                 })
-                continue # Skip modification check for replaced objects
+                continue 
             
             diff = []
             
             # 1. Modifiers
             if old_sig["modifiers"] != new_sig["modifiers"]:
-                # Analyze diff
-                old_mods = {m[0] for m in old_sig["modifiers"]}
-                new_mods = {m[0] for m in new_sig["modifiers"]}
-                
-                m_added = list(new_mods - old_mods)
-                m_removed = list(old_mods - new_mods)
-                
-                if m_added: diff.append(f"modifiers_added={m_added}")
-                if m_removed: diff.append(f"modifiers_removed={m_removed}")
-                if not m_added and not m_removed: diff.append("modifiers_settings_changed")
+                diff.append("modifiers_changed")
             
+            # 1.5 Constraints
+            if old_sig.get("constraints") != new_sig.get("constraints"):
+                diff.append("constraints_changed")
+
             # 2. Materials
             if old_sig["materials"] != new_sig["materials"]:
                 diff.append("materials_changed")
                 
             # 3. Transform (approx)
             if old_sig["dimensions"] != new_sig["dimensions"]:
-                 diff.append(f"dimensions_changed_to_{new_sig['dimensions']}")
+                 diff.append("dimensions_changed")
             elif old_sig["location"] != new_sig["location"]: 
-                # Only report location if dims didn't change (reduce noise)
                 diff.append("moved")
 
             if diff:
@@ -178,17 +177,25 @@ class SceneWatcher:
             changes["new_materials"] = list(added_mats)
 
         # D. Selection
-        new_sel = current_selection - self.last_selection
-        if new_sel:
-            # Filter creation artifacts
-            real_sel = new_sel - added
-            if real_sel: changes["selected"] = list(real_sel)
+        new_sel_set = set(current_selection)
+        if new_sel_set != self.last_selection:
+             # Only report if it's NOT just the added objects (which are auto-selected)
+             real_sel = new_sel_set - added
+             if real_sel: changes["selected"] = list(real_sel)
 
         # E. Active/Mode
         if current_active != self.last_active and current_active:
             changes["active_object"] = current_active
         if current_mode != self.last_mode:
             changes["mode"] = current_mode
+            
+        # F. CONTEXT REFRESH (Visual Grounding)
+        # Always provide a lightweight summary so the agent implies existence
+        changes["context"] = {
+            "active": current_active,
+            "selected": current_selection,
+            "stats": counts
+        }
 
         return changes
 

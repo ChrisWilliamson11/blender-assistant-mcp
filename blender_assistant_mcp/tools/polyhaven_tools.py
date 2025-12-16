@@ -18,7 +18,7 @@ REQ_HEADERS = {
     "User-Agent": "BlenderAssistant/1.0 (Educational)"
 }
 
-def search_polyhaven_assets(asset_type: str = "", query: str = "", limit: int = 10) -> dict:
+def search_polyhaven_assets(asset_type: str = "", query: str = "", limit: int = 10, sort: str = "relevant") -> dict:
     """Search for assets on PolyHaven.
 
     Args:
@@ -84,8 +84,23 @@ def search_polyhaven_assets(asset_type: str = "", query: str = "", limit: int = 
     else:
         filtered = assets
 
+    # Sorting Logic
+    # Convert to list of tuples for sorting
+    results = list(filtered.items())
+
+    if sort == "random":
+        import random
+        random.shuffle(results)
+    elif sort == "newest":
+        # Sort by date_published (descending)
+        # date_published is unix timestamp
+        results.sort(key=lambda x: x[1].get("date_published", 0), reverse=True)
+    # else: "relevant" - implicit order from dict usually by ID or whatever python implementation does. 
+    # If query was used, strict relevancy isn't implemented beyond filtering, 
+    # but we could sort by string match quality if we wanted. For now, kept simple.
+
     # Limit results
-    results = list(filtered.items())[:limit]
+    results = results[:limit]
 
     # Format results
     type_name = asset_type if asset_type else "assets"
@@ -198,7 +213,7 @@ def _solve_resolution(available_res: list, target_res: str) -> str:
     return best[0]
 
 
-def download_polyhaven_hdri(
+def _download_polyhaven_hdri_by_id(
     asset_id: str, resolution: str = "2k", file_format: str = "exr"
 ) -> dict:
     """Download an HDRI from PolyHaven and set it as the world background.
@@ -328,7 +343,7 @@ def download_polyhaven_hdri(
     }
 
 
-def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
+def _download_polyhaven_texture_by_id(asset_id: str, resolution: str = "2k") -> dict:
     """Download a PBR texture set from PolyHaven and apply it to the active object.
 
     Args:
@@ -627,7 +642,7 @@ def download_polyhaven_texture(asset_id: str, resolution: str = "2k") -> dict:
     }
 
 
-def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
+def _download_polyhaven_model_by_id(asset_id: str, file_format: str = "blend", resolution: str = "2k") -> dict:
     """Download a 3D model from PolyHaven and import it into the scene.
 
     Args:
@@ -681,7 +696,9 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
 
     if isinstance(format_data, dict):
         # Look for resolution keys (1k, 2k, 4k, 8k)
-        resolution_keys = ["2k", "4k", "1k", "8k"]  # Prefer 2k
+        # Prioritize requested resolution
+        default_prio = ["2k", "4k", "1k", "8k"]
+        resolution_keys = [resolution] + [r for r in default_prio if r != resolution]
 
         for res_key in resolution_keys:
             if res_key in format_data:
@@ -837,59 +854,103 @@ def download_polyhaven_model(asset_id: str, file_format: str = "blend") -> dict:
     }
 
 
-def download_polyhaven(
-    asset_type: str, asset_id: str, resolution: str = "2k", file_format: str = None, **kwargs
-) -> dict:
-    """Download a PolyHaven asset (HDRI, texture, or model).
+# SMART WRAPPERS
+def download_polyhaven_model(query_or_id: str, file_format: str = "blend", resolution: str = "2k", index: int = 0, sort: str = "random") -> dict:
+    """Download a 3D model from PolyHaven (Auto-Search).
 
     Args:
-        asset_type: 'hdri' | 'texture' | 'model' (plurals accepted)
-        asset_id: Asset ID from search results
-        resolution: For hdri/texture only ('1k'...'16k', default '2k')
-        file_format: For hdri/model only (e.g., 'exr'/'hdr', or 'blend'/'fbx'/'gltf'); auto if omitted
+        query_or_id: Asset ID (e.g. 'wooden_chair_01') OR search query (e.g. 'chair')
+        file_format: blend (default), gltf, fbx
+        resolution: Texture resolution (1k, 2k, 4k). Default 2k.
+        index: Result index to pick (0 = 1st result, 1 = 2nd, etc.)
+        sort: relevant, random, newest. Default "random".
 
     Returns:
-        Dict describing the download/import result or an error.
+        Dict having keys 'success', 'imported_objects', etc.
     """
+    print(f"[PolyHaven] Smart Download Model: '{query_or_id}' (Sort: {sort}, Index: {index})")
     
-    # Handle hallucinated args
-    if "file_type" in kwargs and not file_format:
-        print(f"[PolyHaven] Warning: 'file_type' argument is hallucinated. Mapping to 'file_format'.")
-        file_format = kwargs["file_type"]
-
-    # Normalize asset_type to singular lowercase (accept common plurals/synonyms)
-
-    at = (asset_type or "").strip().lower()
-
-    normalize = {
-        "hdris": "hdri",
-        "hdri": "hdri",
-        "textures": "texture",
-        "texture": "texture",
-        "models": "model",
-        "model": "model",
-    }
-
-    at = normalize.get(at, at)
-
+    # Needs limit to reach the desired index
+    limit_needed = index + 1
+    
+    search_res = search_polyhaven_assets(asset_type="model", query=query_or_id, limit=limit_needed, sort=sort)
+    
+    if not search_res.get("assets") or len(search_res["assets"]) <= index:
+        return {"error": f"Model not found for query: '{query_or_id}' (Index {index} out of range)"}
+        
+    best_asset = search_res["assets"][index]
+    asset_id = best_asset["id"]
+    asset_name = best_asset["name"]
+    
+    print(f"[PolyHaven] Selected asset: {asset_name} (ID: {asset_id})")
+    
+    # Call internal download
+    # Note: _download_model_by_id implementation doesn't support resolution arg yet in previous code?
+    # Let's check. _download_polyhaven_model_by_id(asset_id, file_format)
+    # It hardcodes resolution/format logic inside? 
+    # Wait, the previous impl of download_polyhaven_model DID find resolution keys.
+    # But strict signature was (asset_id, file_format). 
+    # We should update internal one to respect resolution if possible, but for now strict proxy.
+    
     try:
-        if at == "hdri":
-            return download_polyhaven_hdri(asset_id, resolution, file_format or "exr")
-
-        elif at == "texture":
-            return download_polyhaven_texture(asset_id, resolution)
-
-        elif at == "model":
-            return download_polyhaven_model(asset_id, file_format or "blend")
-    except ValueError as e:
-        return {"error": str(e), "hint": "Try a different resolution (e.g. '1k', '2k', '4k') or file format."}
+        return _download_polyhaven_model_by_id(asset_id, file_format=file_format, resolution=resolution)
     except Exception as e:
-        return {"error": f"Download failed: {str(e)}"}
+        return {"error": str(e)}
 
-    else:
-        return {
-            "error": f"Invalid asset_type: {asset_type}. Use 'hdri', 'texture', or 'model'"
-        }
+
+def download_polyhaven_texture(query_or_id: str, resolution: str = "2k", index: int = 0, sort: str = "random") -> dict:
+    """Download a Texture from PolyHaven (Auto-Search) and apply to active object.
+
+    Args:
+        query_or_id: Asset ID or Search Query (e.g. "brick", "floor")
+        resolution: 1k, 2k, 4k, 8k. Default 2k.
+        index: Result index to pick.
+        sort: relevant, random, newest. Default "random".
+    """
+    print(f"[PolyHaven] Smart Download Texture: '{query_or_id}' (Sort: {sort}, Index: {index})")
+    
+    limit_needed = index + 1
+    search_res = search_polyhaven_assets(asset_type="texture", query=query_or_id, limit=limit_needed, sort=sort)
+    
+    if not search_res.get("assets") or len(search_res["assets"]) <= index:
+        return {"error": f"Texture not found for query: '{query_or_id}' (Index {index} out of range)"}
+        
+    best_asset = search_res["assets"][index]
+    asset_id = best_asset["id"]
+    print(f"[PolyHaven] Selected texture: {best_asset['name']} (ID: {asset_id})")
+    
+    try:
+        return _download_polyhaven_texture_by_id(asset_id, resolution=resolution)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def download_polyhaven_hdri(query_or_id: str, resolution: str = "2k", index: int = 0, sort: str = "random") -> dict:
+    """Download an HDRI from PolyHaven (Auto-Search) and set as World Background.
+
+    Args:
+        query_or_id: Asset ID or Search Query (e.g. "sunset", "studio")
+        resolution: 1k, 2k, 4k, 8k. Default 2k.
+        index: Result index to pick.
+        sort: relevant, random, newest. Default "random".
+    """
+    print(f"[PolyHaven] Smart Download HDRI: '{query_or_id}' (Sort: {sort}, Index: {index})")
+    
+    limit_needed = index + 1
+    search_res = search_polyhaven_assets(asset_type="hdri", query=query_or_id, limit=limit_needed, sort=sort)
+    
+    if not search_res.get("assets") or len(search_res["assets"]) <= index:
+        return {"error": f"HDRI not found for query: '{query_or_id}' (Index {index} out of range)"}
+        
+    best_asset = search_res["assets"][index]
+    asset_id = best_asset["id"]
+    print(f"[PolyHaven] Selected HDRI: {best_asset['name']} (ID: {asset_id})")
+    
+    try:
+        # Default format exr
+        return _download_polyhaven_hdri_by_id(asset_id, resolution=resolution, file_format="exr")
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def register():
@@ -922,6 +983,12 @@ def register():
                     "minimum": 1,
                     "maximum": 50,
                 },
+                "sort": {
+                    "type": "string",
+                    "description": "Sort order: 'relevant', 'random', 'newest'",
+                    "enum": ["relevant", "random", "newest"],
+                    "default": "relevant"
+                }
             },
             "required": ["asset_type"],
         },
@@ -953,42 +1020,65 @@ def register():
 
     # Consolidated download tool
 
+    # Smart Tools Registration
+
     tool_registry.register_tool(
-        "download_polyhaven",
-        download_polyhaven,
+        "download_polyhaven_model",
+        download_polyhaven_model,
         (
-            "Download and Import an asset from PolyHaven.\n"
-            "RETURNS: {'status': 'success', 'files': [...], 'scene_changes': ...}\n"
-            "USAGE:\n"
-            "- HDRI: `asset_type='hdri'`, sets World Background.\n"
-            "- Texture: `asset_type='texture'`, applies Material to Active Object.\n"
-            "- Model: `asset_type='model'`, imports objects.\n"
-            "Pass `resolution='2k'` (default) or higher if needed."
+            "Find and download a 3D model from PolyHaven. Automatically searches for best match.\n"
+            "USAGE: `download_polyhaven_model(query_or_id='red chair')`"
         ),
         {
             "type": "object",
             "properties": {
-                "asset_type": {
-                    "type": "string",
-                    "description": "Type of asset to download",
-                    "enum": ["hdri", "hdris", "texture", "textures", "model", "models"],
-                },
-                "asset_id": {
-                    "type": "string",
-                    "description": "Asset ID (from search)",
-                },
-                "resolution": {
-                    "type": "string",
-                    "description": "Resolution for hdri/texture (1k–16k). Default: 2k",
-                    "enum": ["1k", "2k", "4k", "8k", "16k"],
-                    "default": "2k",
-                },
-                "file_format": {
-                    "type": "string",
-                    "description": "Format for hdri/model; auto if omitted.",
-                },
+                "query_or_id": {"type": "string", "description": "Search query or precise Asset ID (e.g. 'wooden_table')"},
+                "resolution": {"type": "string", "description": "Texture resolution (1k, 2k, 4k). Default '2k'", "default": "2k"},
+                "file_format": {"type": "string", "description": "Format (blend, gltf, fbx). Default 'blend'", "default": "blend"},
+                "index": {"type": "integer", "description": "Index of result to download (0=1st, 1=2nd). Default 0.", "default": 0},
+                "sort": {"type": "string", "description": "Sort: 'relevant', 'random', 'newest'. Default 'random'", "default": "random", "enum": ["relevant", "random", "newest"]}
             },
-            "required": ["asset_type", "asset_id"],
+            "required": ["query_or_id"]
         },
-        category="PolyHaven",
+        category="PolyHaven"
+    )
+
+    tool_registry.register_tool(
+        "download_polyhaven_texture",
+        download_polyhaven_texture,
+        (
+            "Find and download a PBR Texture from PolyHaven and apply to Active Object.\n"
+            "USAGE: `download_polyhaven_texture(query_or_id='brick wall')`"
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "query_or_id": {"type": "string", "description": "Search query or precise Asset ID"},
+                "resolution": {"type": "string", "description": "Resolution (1k, 2k, 4k, 8k). Default '2k'", "default": "2k"},
+                "index": {"type": "integer", "description": "Index of result to download (0=1st, 1=2nd). Default 0.", "default": 0},
+                "sort": {"type": "string", "description": "Sort: 'relevant', 'random', 'newest'. Default 'random'", "default": "random", "enum": ["relevant", "random", "newest"]}
+            },
+            "required": ["query_or_id"]
+        },
+        category="PolyHaven"
+    )
+
+    tool_registry.register_tool(
+        "download_polyhaven_hdri",
+        download_polyhaven_hdri,
+        (
+            "Find and download an HDRI environment from PolyHaven and set as World Background.\n"
+            "USAGE: `download_polyhaven_hdri(query_or_id='sunset')`"
+        ),
+        {
+            "type": "object",
+            "properties": {
+                "query_or_id": {"type": "string", "description": "Search query or precise Asset ID"},
+                "resolution": {"type": "string", "description": "Resolution (1k, 2k, 4k, 8k). Default '2k'", "default": "2k"},
+                "index": {"type": "integer", "description": "Index of result to download (0=1st, 1=2nd). Default 0.", "default": 0},
+                "sort": {"type": "string", "description": "Sort: 'relevant', 'random', 'newest'. Default 'random'", "default": "random", "enum": ["relevant", "random", "newest"]}
+            },
+            "required": ["query_or_id"]
+        },
+        category="PolyHaven"
     )
