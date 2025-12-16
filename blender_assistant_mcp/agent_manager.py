@@ -270,6 +270,11 @@ You are collaborating with a human USER who is also editing the scene live.
                      "messages": current_messages
                 }
                 
+                # Check thinking preference
+                prefs = self.preferences.get_preferences()
+                if prefs.enforce_json:
+                    kwargs["format"] = "json"
+                
                 # Merge unified settings
                 if llm_settings:
                     # Map settings to chat_completion arguments

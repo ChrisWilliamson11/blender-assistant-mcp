@@ -1138,6 +1138,8 @@ class AssistantPreferences(bpy.types.AddonPreferences):
             ("OFF", "Off", "Disable thinking (GPT-OSS maps to Low)"),
             ("LOW", "Low", "Short reasoning"),
             ("MEDIUM", "Medium", "More reasoning"),
+            ("HIGH", "High", "Detailed reasoning"),
+        ],
         default="LOW",
     )
 
@@ -1806,6 +1808,7 @@ class AssistantPreferences(bpy.types.AddonPreferences):
 
         # Thinking / execution controls
         settings_col.prop(self, "thinking_level")
+        settings_col.prop(self, "enforce_json")
         settings_col.prop(self, "keep_alive")
 
         # Advanced sampling (collapsible)
